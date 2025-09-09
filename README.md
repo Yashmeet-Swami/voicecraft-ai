@@ -1,36 +1,50 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# VoiceCraftAI
+Convert your audio or video into polished blog posts in seconds using AI!  
 
-## Getting Started
+VoiceCraftAI leverages modern web technologies and AI to automatically transcribe your audio/video content and generate ready-to-publish blog posts.
 
-First, run the development server:
+---
 
-```bash
+## 🚀 Features
+- 🌐 Built with **Next.js 14 App Router & Server Actions**  
+- 🤖 AI-powered transcription using **OpenAI Whisper API**  
+- 📝 Automatic blog post generation from audio/video content  
+- 🔐 Authentication via **Clerk** (Passkeys, GitHub, Google Sign-in)  
+- 💳 Stripe integration for subscriptions, payments, and custom pricing  
+- 💾 Database management with **NeonDb**  
+- 📤 File uploads handled via **UploadThing** (up to 25MB)  
+- 🎙️ Supports both audio and video content processing  
+- 💅 Responsive UI built with **TailwindCSS** & **ShadCN components**  
+- 📜 Written in **TypeScript** for type safety and scalability  
+- 🪝 Webhooks for Stripe events and real-time updates  
+- 📊 User dashboard to manage and edit blog posts  
+- 🖋️ Built-in Markdown editor for content customization  
+- 🔄 Instant updates and path revalidation  
+- 🔔 Toast notifications for user feedback  
+- 🔍 SEO-friendly blog posts for better discoverability  
+- 🔐 Protected routes and secure API endpoints  
+
+---
+
+## 💻 Tech Stack
+**Frontend & Backend:** Next.js 14, React, TypeScript, TailwindCSS  
+**UI Components:** ShadCN UI  
+**Authentication:** Clerk (Passkeys, GitHub, Google)  
+**AI & APIs:** OpenAI Whisper API  
+**Database:** NeonDb  
+**File Uploads:** UploadThing  
+**Payments:** Stripe + Webhooks  
+**Content:** React Markdown  
+
+---
+
+## ⚡ Getting Started
+1. Clone the repo
+git clone https://github.com/Yashmeet-Swami/VoiceCraftAI.git
+
+2. Install dependencies
+npm install
+
+3. Setup environment variables (Clerk, OpenAI, Stripe, NeonDb)
+4. Run the development server
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
-
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
-
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
-
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
