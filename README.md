@@ -40,11 +40,15 @@ VoiceCraftAI leverages modern web technologies and AI to automatically transcrib
 
 ## ⚡ Getting Started
 1. Clone the repo
+```bash
 git clone https://github.com/Yashmeet-Swami/VoiceCraftAI.git
-
+````
 2. Install dependencies
+```bash
 npm install
-
+```
 3. Setup environment variables (Clerk, OpenAI, Stripe, NeonDb)
 4. Run the development server
+```bash
 npm run dev
+```
