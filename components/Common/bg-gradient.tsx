@@ -6,11 +6,14 @@ export default function BgGradient({
   className?: string;
 }) {
   return (
-    <div className="relative isolate">
+    // The main container creates a new stacking context with `isolate`
+    // and merges any passed class names for layout purposes.
+    <div className={`relative isolate ${className}`}>
       <div
         aria-hidden="true"
         className="pointer-events-none absolute inset-x-0 -top-40 -z-10 transform-gpu overflow-hidden blur-3xl sm:-top-80"
       >
+        {/* This div creates the unique shape and gradient */}
         <div
           style={{
             clipPath:
@@ -19,6 +22,7 @@ export default function BgGradient({
           className="relative left-[calc(50%-11rem)] aspect-[1155/678] w-[36.125rem] -translate-x-1/2 rotate-[30deg] bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 opacity-30 sm:left-[calc(50%-30rem)] sm:w-[72rem]"
         />
       </div>
+      {/* Any content passed to the component is rendered here */}
       {children}
     </div>
   );

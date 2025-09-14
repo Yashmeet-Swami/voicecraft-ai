@@ -1,6 +1,5 @@
-import { Button } from "@/components/ui/button";
 import Banner from "@/components/Home/banner";
-import BgGradient from "@/components/Common/bg-gradient";
+import BgGradient from "@/components/common/bg-gradient";
 import { Dot } from "lucide-react";
 import HowItWorks from "@/components/Home/howitworks";
 import Pricing from "@/components/Home/pricing";
@@ -29,9 +28,13 @@ export default function Home() {
         <Dot className="text-purple-400"></Dot>
         <Dot className="text-purple-400"></Dot>
       </div>
-      {/* 
-      <Divider />
-      <Footer /> */}
+      
+      <footer className="bg-gray-100/20 flex h-20 py-24 px-12 z-20 relative overflow-hidden flex-col gap-2 items-end">
+        <p>All Rights Reserved, {new Date().getFullYear()}</p>
+        <a href="/" target="_blank">
+          Built by Yashmeet 🚀
+        </a>
+      </footer>
     </main>
   );
 }

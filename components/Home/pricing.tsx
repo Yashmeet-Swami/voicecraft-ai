@@ -1,50 +1,82 @@
+import { ArrowRight, CheckIcon } from "lucide-react";
+import { Button } from "../ui/button";
+import Link from "next/link";
+import { cn } from "@/lib/utils";
+import { plansMap } from "@/lib/constants";
+
 export default function Pricing() {
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 p-6">
-      <div className="grid md:grid-cols-2 gap-8 w-full max-w-4xl">
-        
-        {/* Basic Plan */}
-        <div className="rounded-2xl border border-gray-200 bg-white shadow-sm p-6 flex flex-col justify-between">
-          <div>
-            <h2 className="text-lg font-semibold">Basic</h2>
-            <p className="text-gray-500 text-sm mb-4">
-              Get started with SpeakEasy!
-            </p>
-            <p className="text-3xl font-bold">
-              $10 <span className="text-base font-medium text-gray-500">USD /month</span>
-            </p>
+    <section className="relative overflow-hidden" id="pricing">
+      {/* Gradient Background - Bottom corner only */}
+      <div className="absolute bottom-0 right-0 w-[600px] h-[600px] bg-gradient-to-tl from-purple-200/30 via-pink-200/20 to-transparent rounded-full blur-3xl"></div>
+      <div className="absolute bottom-0 right-0 w-[400px] h-[400px] bg-gradient-to-tl from-pink-300/25 to-transparent rounded-full blur-2xl"></div>
 
-            <ul className="mt-4 space-y-2 text-gray-600 text-sm">
-              <li>✔ 3 Blog Posts</li>
-              <li>✔ 3 Transcription</li>
-            </ul>
-          </div>
-          <button className="mt-6 w-full bg-black text-white py-2 rounded-full hover:bg-gray-800 transition">
-            Get SpeakEasy →
-          </button>
+      {/* Content */}
+      <div className="relative z-10 py-12 lg:py-24 max-w-5xl mx-auto px-12 lg:px-0">
+        <div className="flex items-center justify-center w-full pb-12">
+          <h2 className="font-bold text-xl uppercase mb-8 text-purple-600">
+            Pricing
+          </h2>
         </div>
-
-        {/* Pro Plan */}
-        <div className="rounded-2xl border border-purple-300 bg-white shadow-md p-6 flex flex-col justify-between">
-          <div>
-            <h2 className="text-lg font-semibold">Pro</h2>
-            <p className="text-gray-500 text-sm mb-4">
-              All Blog Posts, let’s go!
-            </p>
-            <p className="text-3xl font-bold">
-              $19.99 <span className="text-base font-medium text-gray-500">USD /month</span>
-            </p>
-
-            <ul className="mt-4 space-y-2 text-gray-600 text-sm">
-              <li>✔ Unlimited Blog Posts</li>
-              <li>✔ Unlimited Transcriptions</li>
-            </ul>
-          </div>
-          <button className="mt-6 w-full bg-black text-white py-2 rounded-full hover:bg-gray-800 transition">
-            Get SpeakEasy →
-          </button>
+        <div className="relative flex justify-center flex-col lg:flex-row items-center lg:items-stretch gap-8">
+          {plansMap.map(
+            ({ name, price, description, items, id }, idx) => (
+              <div className="relative w-full max-w-lg" key={idx}>
+                <div
+                  className={cn(
+                    "relative flex flex-col h-full gap-4 lg:gap-8 z-10 p-8 rounded-box border-[1px] border-gray-500/20 rounded-2xl bg-white/80 backdrop-blur-sm",
+                    id === "pro" && "border-violet-500 gap-5 border-2 bg-white/90"
+                  )}
+                >
+                  <div className="flex justify-between items-center gap-4">
+                    <div>
+                      <p className="text-lg lg:text-xl font-bold capitalize">
+                        {name}
+                      </p>
+                      <p className="text-base-content/80 mt-2">{description}</p>
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <p className="text-5xl tracking-tight font-extrabold">
+                      ${price}
+                    </p>
+                    <div className="flex flex-col justify-end mb-[4px]">
+                      <p className="text-xs text-base-content/60 uppercase font-semibold">
+                        USD
+                      </p>
+                      <p className="text-xs text-base-content/60">/month</p>
+                    </div>
+                  </div>
+                  <ul className="space-y-2.5 leading-relaxed text-base flex-1">
+                    {items.map((item, idx) => (
+                      <li className="flex items-center gap-2" key={idx}>
+                        <CheckIcon size={18}></CheckIcon>
+                        <span>{item}</span>
+                      </li>
+                    ))}
+                  </ul>
+                  <div className="space-y-2">
+                    <Button
+                      variant={"link"}
+                      className={cn(
+                        "border-2 rounded-full flex gap-2 bg-black text-gray-100",
+                        id === "pro" && "border-amber-300 px-4"
+                      )}
+                    >
+                      <Link
+                        href="/"
+                        className="flex gap-1 items-center"
+                      >
+                        Get SpeakEasy <ArrowRight size={18} />
+                      </Link>
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            )
+          )}
         </div>
       </div>
-    </div>
+    </section>
   );
 }
