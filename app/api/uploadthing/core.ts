@@ -1,3 +1,4 @@
+// app/api/uploadthing/core.ts
 import { currentUser } from "@clerk/nextjs/server";
 import { createUploadthing, type FileRouter } from "uploadthing/next";
 import { UploadThingError } from "uploadthing/server";
@@ -17,8 +18,8 @@ export const ourFileRouter = {
     })
     .onUploadComplete(async ({ metadata, file }) => {
       console.log("Upload complete for userId:", metadata.userId);
-      console.log("file url", file.ufsUrl); // ⚠️ In v7 use `ufsUrl`
-      return { userId: metadata.userId, fileUrl: file.ufsUrl };
+      console.log("file url", file.url); // Use file.url instead of file.ufsUrl
+      return { userId: metadata.userId, fileUrl: file.url };
     }),
 } satisfies FileRouter;
 
