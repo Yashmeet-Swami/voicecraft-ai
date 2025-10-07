@@ -1,4 +1,4 @@
-import BgGradient from "@/components/common/bg-gradient";
+import BgGradient from "../../components/common/bg-gradient";
 import { auth, currentUser } from "@clerk/nextjs/server";
 import { redirect } from "next/navigation";
 import { doesUserExist, updateUser } from "@/lib/user";

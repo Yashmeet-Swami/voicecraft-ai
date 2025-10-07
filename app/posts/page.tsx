@@ -1,4 +1,4 @@
-import BgGradient from "@/components/common/bg-gradient";
+import BgGradient from "../../components/common/bg-gradient";
 import getDbConnection from "@/lib/db";
 import { currentUser } from "@clerk/nextjs/server";
 import { ArrowRight } from "lucide-react";
