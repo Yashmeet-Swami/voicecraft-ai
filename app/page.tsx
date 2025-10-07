@@ -1,5 +1,5 @@
 import Banner from "@/components/Home/banner";
-import BgGradient from "@/components/common/bg-gradient";
+import BgGradient from "@/components/common/gradient";
 import { Dot } from "lucide-react";
 import HowItWorks from "@/components/Home/howitworks";
 import Pricing from "@/components/Home/pricing";
