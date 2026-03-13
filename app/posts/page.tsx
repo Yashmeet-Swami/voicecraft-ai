@@ -4,6 +4,7 @@ import { currentUser } from "@clerk/nextjs/server";
 import { ArrowRight } from "lucide-react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import DeletePostButton from "@/components/posts/delete-post-button";
 
 export default async function Page() {
   const user = await currentUser();
@@ -45,12 +46,15 @@ export default async function Page() {
               <p className="text-gray-600 text-sm mb-4 line-clamp-3">
                 {post.content.split("\n").slice(1).join("\n")}
               </p>
-              <Link
-                href={`/posts/${post.id}`}
-                className="text-purple-600 hover:text-purple-800 font-medium flex gap-1 items-center"
-              >
-                Read more <ArrowRight className="w-5 h-5 pt-1" />
-              </Link>
+              <div className="flex justify-between items-center mt-auto">
+                <Link
+                  href={`/posts/${post.id}`}
+                  className="text-purple-600 hover:text-purple-800 font-medium flex gap-1 items-center"
+                >
+                  Read more <ArrowRight className="w-5 h-5 pt-1" />
+                </Link>
+                <DeletePostButton postId={post.id} />
+              </div>
             </div>
           </BgGradient>
         ))}
