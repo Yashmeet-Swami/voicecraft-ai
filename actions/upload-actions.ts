@@ -8,9 +8,9 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
 // Prefer stable models in production; can be overridden via env
 const GEMINI_TRANSCRIBE_MODEL =
-  process.env.GEMINI_TRANSCRIBE_MODEL || "gemini-2.0-flash";
+  process.env.GEMINI_TRANSCRIBE_MODEL || "gemini-2.5-flash";
 const GEMINI_BLOG_MODEL =
-  process.env.GEMINI_BLOG_MODEL || "gemini-2.0-flash";
+  process.env.GEMINI_BLOG_MODEL || "gemini-2.5-flash";
 
 // ==== Types for Gemini API responses ====
 interface GeminiPart {
@@ -160,7 +160,7 @@ async function callGeminiAPIWithRetry(
     throw new Error("GEMINI_API_KEY environment variable is not set");
   }
 
-  const model = modelName || "gemini-2.0-flash";
+  const model = modelName || "gemini-2.5-flash";
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${GEMINI_API_KEY}`;
 
   for (let attempt = 1; attempt <= RETRY_CONFIG.maxRetries; attempt++) {
@@ -191,7 +191,7 @@ async function callGeminiAPIWithRetry(
       let errorDetails = "";
       try {
         errorDetails = await response.text();
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
       } catch (e) {
         errorDetails = "Could not read error response";
       }
@@ -205,7 +205,7 @@ async function callGeminiAPIWithRetry(
       const shouldRetry = shouldRetryError(status, attempt);
       if (shouldRetry && attempt < RETRY_CONFIG.maxRetries) {
         const delay = getRetryDelay(attempt);
-        console.log(`⏳ Retrying in ${Math.round(delay)/1000} seconds due to ${getErrorDescription(status)}...`);
+        console.log(`⏳ Retrying in ${Math.round(delay) / 1000} seconds due to ${getErrorDescription(status)}...`);
         await sleep(delay);
         continue;
       } else {
@@ -218,7 +218,7 @@ async function callGeminiAPIWithRetry(
 
       if (attempt < RETRY_CONFIG.maxRetries && isNetworkError(errObj)) {
         const delay = getRetryDelay(attempt);
-        console.log(`⏳ Network error, retrying in ${Math.round(delay)/1000} seconds...`);
+        console.log(`⏳ Network error, retrying in ${Math.round(delay) / 1000} seconds...`);
         await sleep(delay);
         continue;
       }
@@ -441,6 +441,37 @@ Transcribe everything you hear:`
   }
 }
 
+// Pre-process transcript to remove fillers and repeated sentences
+async function cleanTranscript(rawTranscript: string): Promise<string> {
+  const prompt = `
+You are an expert editor. Please clean the following transcript.
+Remove all filler words, repeated sentences, and casual conversational phrases.
+Keep only the key ideas, professional tone, and core meaning.
+Do NOT summarize it into a short paragraph; keep the full length of the core ideas, just remove the fluff.
+Return ONLY the cleaned transcript with no preamble or commentary.
+
+Raw Transcript:
+${rawTranscript}
+`.trim();
+
+  const requestBody: Record<string, unknown> = {
+    contents: [{ parts: [{ text: prompt }] }],
+    generationConfig: {
+      temperature: 0.2, // Low temp for accurate cleaning
+      maxOutputTokens: 2048,
+    },
+  };
+
+  try {
+    const rawData = await callGeminiAPIWithRetry(requestBody, "transcript cleaning", GEMINI_BLOG_MODEL);
+    const cleaned = extractTextFromGeminiResponse(rawData);
+    return cleaned || rawTranscript; // Fallback to raw if cleaning fails
+  } catch (error) {
+    console.warn("Failed to clean transcript, using raw version.", error);
+    return rawTranscript;
+  }
+}
+
 // Save blog post
 async function saveBlogPost(userId: string, title: string, content: string): Promise<number> {
   try {
@@ -474,38 +505,51 @@ async function getUserBlogPosts(userId: string): Promise<string> {
   }
 }
 
-// Generate blog via Gemini API (fixed for gemini-2.0-flash; no model fallback, no responseMimeType)
+// Generate blog via Gemini API (fixed for gemini-2.5-flash; no model fallback, no responseMimeType)
 async function generateBlogPost(
-  transcription: string,
-  userPosts: string
+  cleanedTranscription: string,
+  userPosts: string,
+  context: string = ""
 ): Promise<string> {
   const prompt = `
-You are a skilled content writer who converts audio transcriptions into engaging blog posts using Markdown only.
+You are an expert content writer. Your task is to rewrite the provided transcript into a highly engaging, professional blog article.
+Do NOT directly copy the transcript sentences. Instead, rewrite the content to improve readability, remove repetition, and ensure paragraphs are concise.
 
 Style reference (analyze and emulate voice, vocabulary, pacing, and formatting):
-${userPosts || "No previous posts"}
+${userPosts || "No previous posts. Adopt a professional, engaging tone."}
 
-Write a blog post based on the transcript below. Follow these hard rules:
-1) First line must be an SEO-friendly H1 title: "# Your Title".
-2) Then add exactly two newlines.
-3) Write an engaging introduction (2–4 sentences).
-4) Organize the body into 3–5 sections with clear H2 headings (##). Use H3 (###) for sub-points if helpful.
-5) Use bullet or numbered lists where it improves readability.
-6) Include a "Key Takeaways" section with 3–5 concise bullets near the end.
-7) End with a brief conclusion and an optional call to action relevant to the content.
-8) Keep the tone casual-professional and consistent with the style reference.
-9) Do not invent facts beyond the transcript; you may generalize prudently. No external links or citations unless present in the transcript.
-10) Output pure Markdown—no code fences, no front matter, no preamble like "Here is your post".
+Enforce the following strict formatting rules using Markdown:
 
-Length guidance:
-- Aim for ~600–900 words. If the transcript is short or fragmented, write a compact but coherent post (~300–600 words) that synthesizes the main ideas.
+# [Title of the Blog]
 
-If the transcript mentions specific terms, quotes, or phrases worth highlighting, consider using:
-- Blockquotes for notable lines.
-- Short lists for steps, tips, or examples.
+## Introduction
+[Write a short engaging paragraph introducing the topic]
 
-Transcript:
-${transcription}
+## [Section 1 Heading]
+[Content for section 1. Keep paragraphs short and readable.]
+
+## [Section 2 Heading]
+[Content for section 2. Include examples or explanations if applicable.]
+
+## [Section 3 Heading]
+[Content for section 3. Use bullet points if it improves readability.]
+
+## Conclusion
+[Summarize the key ideas and provide a brief closing thought or call to action.]
+
+Important Instructions:
+1. Use the "Cleaned Transcript" below as your main source of information.
+2. Use the "Context Information" to enrich explanations, add specific facts, or clarify terminology not fully explained in the transcript.
+3. Avoid repeating raw transcript sentences verbatim. Generate a well-written article rather than a transcript summary.
+4. Output pure Markdown—no code fences, no front matter, no preamble like "Here is your post".
+
+---
+
+Context Information:
+${context || "No additional background context available."}
+
+Cleaned Transcript:
+${cleanedTranscription}
 `.trim();
 
   const requestBody: Record<string, unknown> = {
@@ -519,9 +563,6 @@ ${transcription}
     generationConfig: {
       temperature: 0.7,
       maxOutputTokens: 2048
-      // Note: Do NOT set responseMimeType here for gemini-2.0-flash,
-      // as the API only allows text/plain, json, xml, yaml, x.enum.
-      // We'll just instruct Markdown via the prompt.
     },
   };
 
@@ -536,13 +577,21 @@ ${transcription}
 }
 
 // Helper to avoid logging/handling internal Next.js redirect as an error
-function getErrorDigest(e: unknown): string | undefined {
-  if (typeof e === "object" && e !== null) {
-    const obj = e as Record<string, unknown>;
-    const d = obj.digest;
-    if (typeof d === "string") return d;
+function isRedirectError(e: unknown): boolean {
+  if (typeof e !== "object" || e === null) return false;
+
+  // Next.js 13+ throws an error with a specific digest for redirects
+  const obj = e as Record<string, unknown>;
+  if (typeof obj.digest === "string" && obj.digest.startsWith("NEXT_REDIRECT")) {
+    return true;
   }
-  return undefined;
+
+  // Sometimes NextJS throws an Error where the message contains NEXT_REDIRECT
+  if (e instanceof Error && e.message.includes("NEXT_REDIRECT")) {
+    return true;
+  }
+
+  return false;
 }
 
 // Main server action
@@ -561,7 +610,16 @@ export async function generateBlogPostAction({
 
     const userPosts = await getUserBlogPosts(userId);
 
-    const blogPost = await generateBlogPost(transcriptText, userPosts);
+    // Retrieve context using RAG
+    const { retrieveContext, ingestTextDocument } = await import("./knowledge-actions");
+    const retrievedContext = await retrieveContext(transcriptText);
+
+    // Clean the transcript before generation
+    console.log("🧹 Cleaning transcript to remove filler words...");
+    const cleanedTranscriptText = await cleanTranscript(transcriptText);
+
+    // Generate Blog
+    const blogPost = await generateBlogPost(cleanedTranscriptText, userPosts, retrievedContext);
 
     if (!blogPost) {
       return {
@@ -576,12 +634,24 @@ export async function generateBlogPostAction({
 
     const postId = await saveBlogPost(userId, title, content);
 
-    revalidatePath(`/posts/${postId}`);
-    redirect(`/posts/${postId}`);
+    // Auto-ingest the ORIGINAL raw transcript into the RAG store for future reference
+    // (Better to save raw keywords into vector space than the heavily summarized cleaned version)
+    try {
+      const docTitle = `Transcript Knowledge - ${new Date().toLocaleDateString()}`;
+      // Fire and forget or await depending on strictness - we'll await to ensure it's logged
+      await ingestTextDocument(docTitle, transcriptText);
+    } catch (ingestError) {
+      console.error("Auto-ingestion of transcript failed. Proceeding anyway.", ingestError);
+    }
+
+    // Return the URL instead of throwing a redirect from the server action
+    return {
+      success: true,
+      message: `/posts/${postId}`,
+    };
   } catch (error) {
     // Let Next.js handle the redirect error without logging
-    const digest = getErrorDigest(error);
-    if (digest?.startsWith("NEXT_REDIRECT;")) {
+    if (isRedirectError(error)) {
       throw error;
     }
 
@@ -590,6 +660,7 @@ export async function generateBlogPostAction({
     return {
       success: false,
       message: `Blog generation failed: ${message}`,
-    };
+      data: null // adding data to match expected return type
+    } as unknown as BlogPostActionResult; // satisfy typescript if types mismatch
   }
 }

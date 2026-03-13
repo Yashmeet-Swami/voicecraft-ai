@@ -7,6 +7,7 @@ import { useUploadThing } from "../utils/uploadthing";
 import { transcribeUploadedFile, generateBlogPostAction } from "@/actions/upload-actions";
 import { useState, useRef } from "react";
 import { Upload, FileAudio, Video, X, Loader2 } from "lucide-react";
+import { useRouter } from "next/navigation";
 
 const schema = z.object({
   file: z
@@ -19,6 +20,7 @@ const schema = z.object({
 });
 
 export default function UploadForm() {
+  const router = useRouter();
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
@@ -53,7 +55,7 @@ export default function UploadForm() {
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragOver(false);
-    
+
     const files = Array.from(e.dataTransfer.files);
     if (files.length > 0) {
       handleFileSelect(files[0]);
@@ -118,17 +120,28 @@ export default function UploadForm() {
 
       toast("🤖 Generating AI blog post...");
 
-      await generateBlogPostAction({
+      const generateResult = await generateBlogPostAction({
         transcriptions: data.transcription ? { text: data.transcription } : { text: "" },
         userId: data.userId,
       });
 
+      if (!generateResult || !generateResult.success) {
+        toast.error("❌ " + (generateResult?.message || "Blog generation failed."));
+        setIsUploading(false);
+        return;
+      }
+
       toast.success("🎉 Woohoo! Your AI blog is created! 🎊");
       setSelectedFile(null);
       setIsUploading(false);
-      
+
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
+      }
+
+      // Navigate to the newly generated blog post
+      if (generateResult.message?.startsWith("/posts/")) {
+        router.push(generateResult.message);
       }
     } catch (err) {
       console.error(err);
@@ -160,8 +173,8 @@ export default function UploadForm() {
       <div
         className={`
           relative border-2 border-dashed rounded-2xl p-8 text-center transition-all duration-300 cursor-pointer
-          ${isDragOver 
-            ? 'border-purple-400 bg-purple-50 scale-[1.02]' 
+          ${isDragOver
+            ? 'border-purple-400 bg-purple-50 scale-[1.02]'
             : 'border-gray-300 hover:border-purple-400 hover:bg-gray-50'
           }
           ${selectedFile ? 'bg-gradient-to-br from-purple-50 to-pink-50 border-purple-300' : ''}
@@ -184,7 +197,7 @@ export default function UploadForm() {
             <div className="mx-auto w-16 h-16 bg-gradient-to-br from-purple-500 to-pink-500 rounded-2xl flex items-center justify-center transform rotate-3 hover:rotate-6 transition-transform duration-300">
               <Upload className="w-8 h-8 text-white" />
             </div>
-            
+
             <div className="space-y-2">
               <h3 className="text-xl font-semibold text-gray-700">
                 Drop your files here
@@ -193,7 +206,7 @@ export default function UploadForm() {
                 or <span className="text-purple-600 font-medium">browse</span> to choose files
               </p>
             </div>
-            
+
             <div className="flex items-center justify-center space-x-4 text-sm text-gray-400">
               <div className="flex items-center space-x-1">
                 <FileAudio className="w-4 h-4" />
@@ -233,7 +246,7 @@ export default function UploadForm() {
                 <X className="w-4 h-4" />
               </Button>
             </div>
-            
+
             <div className="text-sm text-green-600 font-medium">
               ✓ File ready for transcription
             </div>
@@ -270,7 +283,7 @@ export default function UploadForm() {
             <span className="text-sm text-gray-600">Processing your file...</span>
           </div>
           <div className="w-full bg-gray-200 rounded-full h-2 mt-3">
-            <div className="bg-gradient-to-r from-purple-500 to-pink-500 h-2 rounded-full animate-pulse" style={{width: '60%'}}></div>
+            <div className="bg-gradient-to-r from-purple-500 to-pink-500 h-2 rounded-full animate-pulse" style={{ width: '60%' }}></div>
           </div>
         </div>
       )}
