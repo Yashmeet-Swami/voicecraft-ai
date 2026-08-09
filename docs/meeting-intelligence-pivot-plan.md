@@ -1,6 +1,6 @@
 # VoiceCraftAI → AI Meeting Intelligence Platform: Pivot Plan
 
-**Status:** Draft for review (v2 — incorporates architecture review)
+**Status:** Phases 1–3 implemented and shipped. This doc (v3) records the decisions made along the way and what's next.
 **Date:** 2026-08-10
 
 ## 1. Why this direction
@@ -155,14 +155,18 @@ Current: `upload-form.tsx` → UploadThing `onUploadComplete` → client calls `
 Proposed for meetings — **explicit job table from Phase 1, not fire-and-forget:**
 
 1. Upload completes → insert `meetings` row (`status = 'uploaded'`) and a `processing_jobs` row (`status = 'queued'`). Return immediately; dashboard shows a "Processing…" card.
-2. A **trigger mechanism** advances queued jobs. A detached promise in the upload handler is not sufficient — serverless runtimes may terminate the container once the HTTP response is sent, silently dropping the work. Options, in order of effort/cost:
-   - **v1 (no new infra, $0 — recommended default):** *lazy client-triggered processing*. When the dashboard/meeting-list page loads (or on an interval while the tab is open), the client calls `/api/jobs/process`. The endpoint atomically claims one `queued` job (`UPDATE ... SET status = 'running' WHERE status = 'queued' ... RETURNING`, guarding against a second concurrent claim), runs the pipeline (download → transcribe → clean → extract → write results), and marks `done`/`failed` with `attempts` incremented on failure. No cron needed — the worker only runs while someone has the app open, which is acceptable at portfolio/personal scale.
-     - *Rejected alternative:* Vercel Cron hitting this endpoint every 1–2 minutes. **Vercel's Hobby plan only permits cron schedules that run once per day** — anything more frequent fails at deploy time, and per-minute cron requires the paid Pro plan. Cron is only viable here if upgrading to Pro is acceptable, or by pointing a *free external* scheduler (e.g. GitHub Actions on a schedule, cron-job.org) at the same endpoint instead of Vercel's own cron.
-   - **v2 (more robust, still free at this scale):** if processing needs to happen without the app being open, point a free external scheduler (GitHub Actions scheduled workflow, cron-job.org) at `/api/jobs/process` every 1–5 minutes instead of Vercel Cron.
-   - **v3 (paid, defer to Phase 5):** move the same job-table contract onto a durable execution platform (Inngest, Trigger.dev, or QStash) once retry/backoff/concurrency requirements outgrow free tiers — this becomes an implementation swap under an unchanged schema, not an architecture rewrite, because the `processing_jobs` contract doesn't change.
+2. A **trigger mechanism** advances queued jobs. A detached promise in the upload handler is not sufficient — serverless runtimes may terminate the container once the HTTP response is sent, silently dropping the work.
 3. UI polls or revalidates the meeting detail page until `meetings.status = 'ready'`.
 
-This directly addresses reliability risk #1 at zero cost for the v1 cut, while keeping the door open to a real queue later without a schema migration.
+**Shipped (Phase 1):** *lazy client-triggered processing*. When the dashboard/meeting-list page loads (or on an interval while the tab is open), the client calls `/api/jobs/process`. The endpoint atomically claims one `queued` job (`UPDATE ... SET status = 'running' WHERE status = 'queued' ... RETURNING`, guarding against a second concurrent claim), runs the pipeline (download → transcribe → clean → extract → write results), and marks `done`/`failed` with `attempts` incremented on failure. $0, no new infra — but only advances while someone has the app open, which is a real limitation, not just a stepping stone we're pretending not to notice.
+
+**Decision: the next step is a managed queue (Inngest), not external cron.** Two options were on the table for "make it advance without a tab open":
+- *External cron* (GitHub Actions scheduled workflow, cron-job.org) hitting `/api/jobs/process` every 1–5 minutes — free, but it's a cron hack bolted onto a serverless app, not a real execution model. Rejected on those grounds, not on cost.
+- *A managed queue* (Inngest, Trigger.dev, or QStash) — a genuine worker/executor model: jobs get pushed to the service, it invokes your endpoint reliably with retries/backoff built in. **Inngest specifically** is the pick: 50,000 executions/month free (see §9) is enormous headroom at this scale, and it has a first-class Next.js integration (a single `/api/inngest` route handler). This is what "real" background processing looks like, and it's still $0.
+
+We're intentionally *not* implementing this yet — the lazy-trigger mechanism is working, tested, and nothing has hit its limits. When we do the swap, it's a trigger-mechanism replacement under an unchanged `processing_jobs` contract (`processNextJob()` becomes the Inngest function body), not a schema migration or pipeline rewrite. Rejected the earlier "external cron as an interim step" idea entirely — if we're going to move off lazy-trigger, go straight to the real thing.
+
+(Vercel Cron itself was also considered and rejected outright, independent of the above: **Vercel's Hobby plan only permits cron schedules that run once per day** — anything more frequent fails at deploy time, and per-minute cron requires the paid Pro plan.)
 
 ## 6. RAG usage — two distinct flows
 
@@ -189,7 +193,7 @@ Flow B has a schema dependency worth calling out now: the existing `document_chu
 
 ## 8. Phased delivery plan
 
-**Phase 1 — Core Meeting Intelligence**
+**Phase 1 — Core Meeting Intelligence ✅ Shipped**
 Goal: one uploaded meeting reliably becomes structured intelligence, end to end, with no lost work.
 - `meetings`, `transcripts`, `processing_jobs`, `decisions`, `action_items`, `open_questions` tables (with nullable `source_segment_id` columns already in place).
 - Job-table + lazy client-triggered pipeline (§5) — no fire-and-forget, no paid cron.
@@ -198,27 +202,33 @@ Goal: one uploaded meeting reliably becomes structured intelligence, end to end,
 - Explicit failure state surfaced in the UI (`meetings.status = 'failed'` with retry).
 - Action items are read-only text (owner as free-text string, no assignment/notifications yet).
 
-**Phase 2 — Source Grounding**
+**Phase 2 — Source Grounding ✅ Shipped**
 Goal: every AI result can be traced back to the meeting.
 - Redesign transcription prompt for diarized+timestamped segments; populate `meeting_segments`.
 - Populate `source_segment_id` on decisions/action_items/open_questions.
-- Timeline UI ("00:04 → topic"), transcript viewer, "jump to timestamp" playback (audio already accessible via UploadThing URL).
+- Timeline UI + audio player with click-to-seek citations.
 
-**Phase 3 — Meeting Knowledge Base**
+**Phase 3 — Meeting Knowledge Base ✅ Shipped**
 Goal: meetings become a searchable organizational knowledge base.
-- Extend RAG ingestion with `meeting_id`/`segment_id` linkage (§6).
-- "Ask this meeting" and "Ask across meetings" with cited sources — the flagship feature.
-- `meeting_type`-specific extraction fields as an optional enhancement, now that the core loop is proven.
+- Extended RAG ingestion (`document_chunks.meeting_id`/`segment_id`) linking chunks back to a meeting/segment (§6).
+- "Ask this meeting" and "Ask across meetings" with cited, clickable sources.
+- Fixed a pre-existing gap along the way: `retrieveContext` had no per-user scoping; added it for the meeting pipeline so one user's meetings can't leak into another's extraction context.
+- `meeting_type`-specific extraction schemas remain deferred (see §4) — not yet needed.
+
+**Phase 3.5 — Real Background Worker (next up)**
+Goal: meetings process without anyone needing the app open, using an actual worker model instead of a page-triggered poll.
+- Swap the trigger in `/api/jobs/process` for an Inngest function — `processNextJob()`'s body doesn't change, only what calls it does (see §5's decision).
+- No schema changes required; `processing_jobs` already models queued/running/done/failed.
+- Not urgent — the lazy-trigger mechanism hasn't hit a real limit yet. Do this when it does, or when demoing the product to someone who won't have a tab open.
 
 **Phase 4 — Collaboration**
 Goal: convert meeting information into actual work.
 - Minimal team concept: invite collaborators by email (Clerk organizations, or a simple `team_members` table).
 - Resolve `owner_name` → `owner_user_id`, add status toggle (open/in_progress/done), "My Action Items" view, in-app notifications.
-- Can proceed in parallel with Phase 3 if resourced — the two aren't dependent on each other.
+- Can proceed in parallel with Phase 3.5 if resourced — the two aren't dependent on each other.
 
 **Phase 5 — Production Engineering**
 Goal: make it defensible as a production system.
-- Move processing onto a durable queue (Inngest/Trigger.dev/QStash) with real retries, backoff, and idempotency.
 - Chunked upload/transcription for long meetings (>20MB / >~15min).
 - Worker concurrency limits, rate limiting, LLM cost/usage tracking, observability.
 - Reconsider `posts` (blog) feature: keep as secondary export ("turn this meeting into a blog recap") or retire.
@@ -238,13 +248,13 @@ All services below have a permanent free tier (not a time-limited trial) that co
 | UploadThing | A few GB storage on free tier | Exceeding storage with many large test uploads left undeleted |
 | Clerk | Up to 10,000 MAU free | Not a realistic risk for a personal project |
 
-**Net effect on the plan:** no change to Phases 1–4.
+**Net effect on the plan:** no change to Phases 1–3.
 
-Phase 5's "durable queue" options also have permanent free tiers, not just trials — verified: **Inngest** (50,000 executions/month, 5 concurrent steps), **Upstash QStash** (1,000 messages/day, then $1/100K), **Trigger.dev** ($0/month plan with $5 of included compute credit, 20 concurrent runs). Each of these comfortably covers a solo/portfolio-scale meeting app — a handful of meetings a day uses a tiny fraction of any of these caps. Unlike Vercel Cron's flat "once/day on Hobby, no exceptions" limit, these are usage-metered: cost only becomes possible if usage grows to real multi-user traffic (hundreds of meetings/day), at which point revisiting cost is reasonable, not before.
+Phase 3.5's managed-queue options all have permanent free tiers, not just trials — verified: **Inngest** (50,000 executions/month, 5 concurrent steps — the pick, see §5), **Upstash QStash** (1,000 messages/day, then $1/100K), **Trigger.dev** ($0/month plan with $5 of included compute credit, 20 concurrent runs). Each comfortably covers a solo/portfolio-scale meeting app — a handful of meetings a day uses a tiny fraction of any of these caps. Unlike Vercel Cron's flat "once/day on Hobby, no exceptions" limit, these are usage-metered: cost only becomes possible if usage grows to real multi-user traffic (hundreds of meetings/day), at which point revisiting cost is reasonable, not before.
 
-## 10. Open questions for the user
+## 10. Decisions made
 
-- Keep the existing blog-post feature running in parallel, or fully replace it?
-- Is real diarization a hard requirement before this feels "done," or is the Phase 1 → Phase 2 split (plain transcript first, speakers/timestamps after) acceptable?
-- Is the lazy client-triggered job runner (§5, no cron) acceptable for Phase 1, or is it worth wiring a free external scheduler (GitHub Actions/cron-job.org) so meetings process even when no one has the dashboard open?
-- Any interest in the `meeting_type`-adaptive extraction schema (Phase 3) as a differentiator, or keep the schema uniform?
+- **Blog feature:** keep it, but demote it. It stays as-is for now; per Phase 5 it becomes a secondary export ("turn this meeting into a blog recap") generated *from* meeting intelligence rather than a parallel product. Don't maintain two separate generation pipelines long-term.
+- **Diarization:** the Phase 1 → Phase 2 split (plain transcript first, speakers/timestamps after) was correct and is what shipped — diarization was real but never blocked the core loop.
+- **Job runner:** lazy client-trigger shipped for Phase 1 and stays until it's actually a problem. The next step, when needed, is Inngest (Phase 3.5) — not external cron. See §5 for the full reasoning; external cron was considered and rejected as a workaround rather than a real execution model.
+- **`meeting_type`-adaptive extraction:** yes, eventually (engineering/sales/1:1-specific fields are a genuine differentiator), but explicitly after the uniform schema is proven — tracked as an enhancement under Phase 3, not started.
