@@ -3,39 +3,13 @@
 import getDbConnection from "@/lib/db";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+import { callGeminiAPIWithRetry, extractTextFromGeminiResponse, sleep } from "@/lib/gemini";
 
 // Prefer stable models in production; can be overridden via env
 const GEMINI_TRANSCRIBE_MODEL =
   process.env.GEMINI_TRANSCRIBE_MODEL || "gemini-2.5-flash";
 const GEMINI_BLOG_MODEL =
   process.env.GEMINI_BLOG_MODEL || "gemini-2.5-flash";
-
-// ==== Types for Gemini API responses ====
-interface GeminiPart {
-  text?: string;
-}
-
-interface GeminiContent {
-  parts?: GeminiPart[];
-}
-
-interface GeminiCandidate {
-  content?: GeminiContent;
-  [key: string]: unknown;
-}
-
-interface GeminiResponse {
-  candidates?: GeminiCandidate[];
-}
-
-interface RetryConfig {
-  maxRetries: number;
-  baseDelay: number;
-  maxDelay: number;
-  backoffFactor: number;
-}
 
 interface TranscriptionResult {
   success: boolean;
@@ -62,26 +36,6 @@ interface BlogPostActionResult {
   message: string;
 }
 
-// Retry configuration
-const RETRY_CONFIG: RetryConfig = {
-  maxRetries: 6,          // increased for transient 5xx/UNAVAILABLE
-  baseDelay: 1000,        // 1 second
-  maxDelay: 30000,        // 30 seconds
-  backoffFactor: 2
-};
-
-// Helper function to sleep
-function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-// Calculate delay with exponential backoff + jitter
-function getRetryDelay(attempt: number): number {
-  const delay = RETRY_CONFIG.baseDelay * Math.pow(RETRY_CONFIG.backoffFactor, attempt - 1);
-  const jitter = Math.random() * 300; // small jitter to avoid thundering herd
-  return Math.min(delay + jitter, RETRY_CONFIG.maxDelay);
-}
-
 // Helper function to determine MIME type from file name
 function getMimeType(fileName: string): string {
   const extension = fileName?.split('.').pop()?.toLowerCase();
@@ -105,188 +59,60 @@ function getMimeType(fileName: string): string {
   return mimeTypes[extension || ''] || 'application/octet-stream';
 }
 
-// Helper function to safely extract text from Gemini response
-function extractTextFromGeminiResponse(rawData: GeminiResponse): string {
-  try {
-    const candidates = rawData?.candidates;
-    if (!candidates || candidates.length === 0) {
-      throw new Error("No candidates in Gemini response");
-    }
-
-    const candidate = candidates[0];
-
-    const standardText = candidate?.content?.parts?.[0]?.text;
-    if (standardText && typeof standardText === 'string' && standardText.trim().length > 0) {
-      return standardText;
-    }
-
-    const directText = (candidate as Record<string, unknown>)['text'];
-    if (typeof directText === 'string' && directText.trim().length > 0) {
-      return directText;
-    }
-
-    const outputObj = (candidate as Record<string, unknown>)['output'] as Record<string, unknown> | undefined;
-    if (outputObj && typeof outputObj === 'object') {
-      const outputText = outputObj['text'] as unknown;
-      if (typeof outputText === 'string' && outputText.trim().length > 0) {
-        return outputText;
-      }
-    }
-
-    if (candidate?.content?.parts && Array.isArray(candidate.content.parts)) {
-      const allTexts = candidate.content.parts
-        .map(part => part.text)
-        .filter((text): text is string => typeof text === 'string' && text.trim().length > 0)
-        .join(' ');
-      if (allTexts.trim().length > 0) return allTexts;
-    }
-
-    throw new Error("No text content found in Gemini response structure");
-  } catch (error) {
-    console.error("Error extracting text from Gemini response:", error);
-    throw new Error("Failed to extract text from Gemini response");
-  }
+interface PreparedFile {
+  base64Data: string;
+  mimeType: string;
+  isAudio: boolean;
+  isVideo: boolean;
+  fileSizeMB: string;
 }
 
-// Robust API call function with retry logic
-async function callGeminiAPIWithRetry(
-  requestBody: Record<string, unknown>,
-  operationType: string = "transcription",
-  modelName?: string
-): Promise<GeminiResponse> {
-  let lastError: Error | null = null;
+// Shared by transcribeUploadedFile and transcribeMeetingSegments: download
+// from the upload host, size-check, and base64-encode for a Gemini
+// inlineData part.
+async function prepareFileForGemini(fileUrl: string, fileName: string): Promise<PreparedFile> {
+  const mimeType = getMimeType(fileName || "");
+  const isAudio = mimeType.startsWith('audio/');
+  const isVideo = mimeType.startsWith('video/');
 
-  if (!GEMINI_API_KEY) {
-    throw new Error("GEMINI_API_KEY environment variable is not set");
-  }
+  console.log(`🎵 Detected MIME type: ${mimeType} (${isAudio ? 'Audio' : isVideo ? 'Video' : 'Unknown'} file)`);
 
-  const model = modelName || "gemini-2.5-flash";
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${GEMINI_API_KEY}`;
+  console.log("⬇️ Downloading file from UploadThing...");
+  let fileResponse: Response | null = null;
 
-  for (let attempt = 1; attempt <= RETRY_CONFIG.maxRetries; attempt++) {
+  for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      console.log(`🤖 Sending ${operationType} request to Gemini (attempt ${attempt}/${RETRY_CONFIG.maxRetries}) using model "${model}"...`);
-
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 60_000); // 60s per attempt
-
-      const response = await fetch(
-        url,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(requestBody),
-          signal: controller.signal,
-        }
-      ).finally(() => clearTimeout(timeoutId));
-
-      if (response.ok) {
-        console.log(`✅ ${operationType} request successful on attempt ${attempt}`);
-        const result = await response.json() as GeminiResponse;
-        return result;
+      fileResponse = await fetch(fileUrl);
+      if (fileResponse.ok) break;
+      if (attempt < 3) {
+        console.log(`⚠️ Download attempt ${attempt} failed, retrying...`);
+        await sleep(1000 * attempt);
       }
-
-      const status = response.status;
-      const statusText = response.statusText;
-      let errorDetails = "";
-      try {
-        errorDetails = await response.text();
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      } catch (e) {
-        errorDetails = "Could not read error response";
-      }
-
-      console.error(`❌ Gemini API error (attempt ${attempt}):`, {
-        status,
-        statusText,
-        details: errorDetails
-      });
-
-      const shouldRetry = shouldRetryError(status, attempt);
-      if (shouldRetry && attempt < RETRY_CONFIG.maxRetries) {
-        const delay = getRetryDelay(attempt);
-        console.log(`⏳ Retrying in ${Math.round(delay) / 1000} seconds due to ${getErrorDescription(status)}...`);
-        await sleep(delay);
-        continue;
-      } else {
-        throw new Error(getUserFriendlyError(status, statusText, errorDetails));
-      }
-
     } catch (error) {
-      const errObj = error instanceof Error ? error : new Error(String(error));
-      lastError = errObj;
-
-      if (attempt < RETRY_CONFIG.maxRetries && isNetworkError(errObj)) {
-        const delay = getRetryDelay(attempt);
-        console.log(`⏳ Network error, retrying in ${Math.round(delay) / 1000} seconds...`);
-        await sleep(delay);
-        continue;
-      }
-
-      if (attempt === RETRY_CONFIG.maxRetries) {
-        throw lastError;
-      }
+      if (attempt === 3) throw error;
+      console.log(`⚠️ Download attempt ${attempt} failed, retrying...`);
+      await sleep(1000 * attempt);
     }
   }
 
-  throw lastError || new Error("Unknown error during API call");
-}
-
-// Helper functions for error handling
-function shouldRetryError(status: number, attempt: number): boolean {
-  const retryableStatuses = [503, 502, 504, 429, 500];
-  return retryableStatuses.includes(status) && attempt < RETRY_CONFIG.maxRetries;
-}
-
-function isNetworkError(error: Error): boolean {
-  const networkErrorMessages = [
-    'fetch failed',
-    'network error',
-    'connection error',
-    'timeout',
-    'ECONNRESET',
-    'ENOTFOUND',
-    'ETIMEDOUT',
-    'aborted',
-    'AbortError'
-  ];
-  return networkErrorMessages.some(msg =>
-    error.message.toLowerCase().includes(msg.toLowerCase())
-  );
-}
-
-function getErrorDescription(status: number): string {
-  const descriptions: Record<number, string> = {
-    429: "rate limiting",
-    500: "internal server error",
-    502: "bad gateway",
-    503: "service unavailable",
-    504: "gateway timeout"
-  };
-  return descriptions[status] || `HTTP ${status}`;
-}
-
-function getUserFriendlyError(status: number, statusText: string, details: string): string {
-  switch (status) {
-    case 401:
-      return "Invalid API key. Please check your Gemini API configuration.";
-    case 403:
-      return "Access forbidden. Your API key may not have the required permissions.";
-    case 429:
-      return "Too many requests. Please wait a moment before trying again.";
-    case 500:
-    case 502:
-    case 503:
-    case 504:
-      return "Gemini service is temporarily unavailable. Please try again in a few minutes.";
-    case 400:
-      if (details.toLowerCase().includes('file') || details.toLowerCase().includes('audio')) {
-        return "The uploaded file format is not supported or the file may be corrupted.";
-      }
-      return "Invalid request. Please check your file and try again.";
-    default:
-      return `Transcription service error: ${status} ${statusText}. Please try again.`;
+  if (!fileResponse || !fileResponse.ok) {
+    throw new Error(`Failed to download file: ${fileResponse?.status} - ${fileResponse?.statusText}`);
   }
+
+  const arrayBuffer = await fileResponse.arrayBuffer();
+  const fileSizeMB = (arrayBuffer.byteLength / (1024 * 1024)).toFixed(2);
+  console.log(`✅ File downloaded successfully: ${fileSizeMB}MB`);
+
+  const maxSizeBytes = 20 * 1024 * 1024;
+  if (arrayBuffer.byteLength > maxSizeBytes) {
+    throw new Error(`File too large (${fileSizeMB}MB). Please use files smaller than 20MB.`);
+  }
+
+  console.log("🔄 Converting to Base64 for Gemini API...");
+  const base64Data = Buffer.from(arrayBuffer).toString('base64');
+  console.log(`✅ Base64 conversion complete: ${(base64Data.length / 1024).toFixed(0)}KB encoded`);
+
+  return { base64Data, mimeType, isAudio, isVideo, fileSizeMB };
 }
 
 // Transcribe uploaded file using Gemini API with retry logic
@@ -307,52 +133,12 @@ export async function transcribeUploadedFile(
     console.log("📁 File URL:", fileUrl);
     console.log("📝 File Name:", fileName || "Unknown");
 
-    // Step 1: Detect MIME type correctly using fileName
-    const mimeType = getMimeType(fileName || "");
-    const isAudio = mimeType.startsWith('audio/');
-    const isVideo = mimeType.startsWith('video/');
+    const { base64Data, mimeType, isAudio, fileSizeMB } = await prepareFileForGemini(
+      fileUrl,
+      fileName || ""
+    );
 
-    console.log(`🎵 Detected MIME type: ${mimeType} (${isAudio ? 'Audio' : isVideo ? 'Video' : 'Unknown'} file)`);
-
-    // Step 2: Download file from UploadThing with retry logic
-    console.log("⬇️ Downloading file from UploadThing...");
-    let fileResponse: Response | null = null;
-
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      try {
-        fileResponse = await fetch(fileUrl);
-        if (fileResponse.ok) break;
-        if (attempt < 3) {
-          console.log(`⚠️ Download attempt ${attempt} failed, retrying...`);
-          await sleep(1000 * attempt);
-        }
-      } catch (error) {
-        if (attempt === 3) throw error;
-        console.log(`⚠️ Download attempt ${attempt} failed, retrying...`);
-        await sleep(1000 * attempt);
-      }
-    }
-
-    if (!fileResponse || !fileResponse.ok) {
-      throw new Error(`Failed to download file: ${fileResponse?.status} - ${fileResponse?.statusText}`);
-    }
-
-    const arrayBuffer = await fileResponse.arrayBuffer();
-    const fileSizeMB = (arrayBuffer.byteLength / (1024 * 1024)).toFixed(2);
-    console.log(`✅ File downloaded successfully: ${fileSizeMB}MB`);
-
-    const fileSizeBytes = arrayBuffer.byteLength;
-    const maxSizeBytes = 20 * 1024 * 1024;
-    if (fileSizeBytes > maxSizeBytes) {
-      throw new Error(`File too large (${fileSizeMB}MB). Please use files smaller than 20MB.`);
-    }
-
-    // Step 3: Convert to Base64 inline data
-    console.log("🔄 Converting to Base64 for Gemini API...");
-    const base64Data = Buffer.from(arrayBuffer).toString('base64');
-    console.log(`✅ Base64 conversion complete: ${(base64Data.length / 1024).toFixed(0)}KB encoded`);
-
-    // Step 4: Prepare request body
+    // Prepare request body
     const requestBody: Record<string, unknown> = {
       contents: [
         {
@@ -441,8 +227,119 @@ Transcribe everything you hear:`
   }
 }
 
+export interface TranscriptSegmentResult {
+  speaker: string | null;
+  start: number;
+  end: number;
+  text: string;
+}
+
+export interface SegmentedTranscriptionResult {
+  success: boolean;
+  message: string;
+  segments: TranscriptSegmentResult[];
+}
+
+const SEGMENT_RESPONSE_SCHEMA = {
+  type: "array",
+  items: {
+    type: "object",
+    properties: {
+      speaker: { type: "string", nullable: true },
+      start: { type: "number" },
+      end: { type: "number" },
+      text: { type: "string" },
+    },
+    required: ["start", "end", "text"],
+  },
+};
+
+function toFiniteNumber(value: unknown): number | null {
+  const n = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+// Diarized, timestamped transcription for meeting source-grounding (Phase 2).
+// Returns success: false (never throws) so callers can fall back to plain
+// transcribeUploadedFile when the model can't produce usable segments -
+// see docs/meeting-intelligence-pivot-plan.md §3.1.2 and §7.
+export async function transcribeMeetingSegments(
+  fileUrl: string,
+  fileName: string
+): Promise<SegmentedTranscriptionResult> {
+  try {
+    const { base64Data, mimeType, isAudio } = await prepareFileForGemini(fileUrl, fileName);
+
+    const requestBody: Record<string, unknown> = {
+      contents: [
+        {
+          parts: [
+            { inlineData: { data: base64Data, mimeType } },
+            {
+              text: `Transcribe this ${isAudio ? "audio" : "video"} recording of a meeting.
+
+Break the transcription into short segments, one per distinct thought or speaker turn. For each segment, provide:
+- "speaker": a label like "Speaker 1", "Speaker 2" if you can distinguish voices, or null if you cannot.
+- "start": the start time of the segment in seconds from the beginning of the recording.
+- "end": the end time of the segment in seconds.
+- "text": the transcribed words for that segment.
+
+Provide your best estimate of timestamps even if you are not fully certain - approximate timestamps are acceptable. Return an empty array if there is no speech.`,
+            },
+          ],
+        },
+      ],
+      generationConfig: {
+        temperature: 0.1,
+        maxOutputTokens: 8192,
+        responseMimeType: "application/json",
+        responseSchema: SEGMENT_RESPONSE_SCHEMA,
+      },
+    };
+
+    const rawData = await callGeminiAPIWithRetry(
+      requestBody,
+      "segmented transcription",
+      GEMINI_TRANSCRIBE_MODEL
+    );
+    const jsonText = extractTextFromGeminiResponse(rawData);
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(jsonText);
+    } catch (error) {
+      console.warn("Failed to parse segmented transcription JSON:", error);
+      return { success: false, message: "Segmented transcription returned invalid JSON", segments: [] };
+    }
+
+    if (!Array.isArray(parsed)) {
+      return { success: false, message: "Segmented transcription response was not an array", segments: [] };
+    }
+
+    const segments = parsed
+      .filter(
+        (s): s is Record<string, unknown> =>
+          !!s && typeof s === "object" && typeof (s as Record<string, unknown>).text === "string"
+      )
+      .map((s) => ({
+        speaker: typeof s.speaker === "string" ? s.speaker : null,
+        start: toFiniteNumber(s.start) ?? 0,
+        end: toFiniteNumber(s.end) ?? 0,
+        text: (s.text as string).trim(),
+      }))
+      .filter((s) => s.text.length > 0);
+
+    return { success: true, message: "Segmented transcription completed", segments };
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Unknown error during segmented transcription";
+    console.warn("Segmented transcription failed:", message);
+    return { success: false, message, segments: [] };
+  }
+}
+
 // Pre-process transcript to remove fillers and repeated sentences
-async function cleanTranscript(rawTranscript: string): Promise<string> {
+export async function cleanTranscript(rawTranscript: string): Promise<string> {
   const prompt = `
 You are an expert editor. Please clean the following transcript.
 Remove all filler words, repeated sentences, and casual conversational phrases.
