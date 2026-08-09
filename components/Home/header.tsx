@@ -68,6 +68,7 @@ export default function Header() {
         <NavLink href="/#pricing">Pricing</NavLink>
         <SignedIn>
           <NavLink href="/posts">Your Posts</NavLink>
+          <NavLink href="/meetings">Meetings</NavLink>
         </SignedIn>
       </div>
 
