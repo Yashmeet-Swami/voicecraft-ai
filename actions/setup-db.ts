@@ -49,3 +49,127 @@ export async function setupDatabase() {
     };
   }
 }
+
+// Meeting Intelligence schema (Phase 1). Additive — does not touch
+// documents/document_chunks/posts.
+export async function setupMeetingsSchema() {
+  try {
+    const sql = await getDbConnection();
+
+    console.log("Setting up meeting intelligence schema...");
+
+    await sql`
+      CREATE TABLE IF NOT EXISTS meetings (
+        id SERIAL PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        meeting_type TEXT NOT NULL DEFAULT 'general',
+        status TEXT NOT NULL DEFAULT 'uploaded',
+        file_name TEXT,
+        audio_url TEXT,
+        duration_seconds INTEGER,
+        summary TEXT,
+        created_at TIMESTAMPTZ DEFAULT now(),
+        completed_at TIMESTAMPTZ
+      );
+    `;
+    console.log("✅ meetings table created");
+
+    await sql`
+      CREATE TABLE IF NOT EXISTS transcripts (
+        id SERIAL PRIMARY KEY,
+        meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+        raw_text TEXT NOT NULL,
+        cleaned_text TEXT,
+        created_at TIMESTAMPTZ DEFAULT now()
+      );
+    `;
+    console.log("✅ transcripts table created");
+
+    await sql`
+      CREATE TABLE IF NOT EXISTS processing_jobs (
+        id SERIAL PRIMARY KEY,
+        meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+        status TEXT NOT NULL DEFAULT 'queued',
+        attempts INTEGER NOT NULL DEFAULT 0,
+        error TEXT,
+        started_at TIMESTAMPTZ,
+        completed_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ DEFAULT now()
+      );
+    `;
+    console.log("✅ processing_jobs table created");
+
+    // Populated starting Phase 2 (diarization). Created now so decisions/
+    // action_items/open_questions can reference it from day one.
+    await sql`
+      CREATE TABLE IF NOT EXISTS meeting_segments (
+        id SERIAL PRIMARY KEY,
+        meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+        speaker_label TEXT,
+        start_seconds NUMERIC,
+        end_seconds NUMERIC,
+        text TEXT NOT NULL,
+        segment_index INTEGER NOT NULL
+      );
+    `;
+    console.log("✅ meeting_segments table created");
+
+    await sql`
+      CREATE TABLE IF NOT EXISTS decisions (
+        id SERIAL PRIMARY KEY,
+        meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+        text TEXT NOT NULL,
+        source_segment_id INTEGER REFERENCES meeting_segments(id),
+        created_at TIMESTAMPTZ DEFAULT now()
+      );
+    `;
+    console.log("✅ decisions table created");
+
+    await sql`
+      CREATE TABLE IF NOT EXISTS action_items (
+        id SERIAL PRIMARY KEY,
+        meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+        task TEXT NOT NULL,
+        owner_name TEXT,
+        owner_user_id TEXT,
+        due_date DATE,
+        status TEXT NOT NULL DEFAULT 'open',
+        source_segment_id INTEGER REFERENCES meeting_segments(id),
+        created_at TIMESTAMPTZ DEFAULT now()
+      );
+    `;
+    console.log("✅ action_items table created");
+
+    await sql`
+      CREATE TABLE IF NOT EXISTS open_questions (
+        id SERIAL PRIMARY KEY,
+        meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+        text TEXT NOT NULL,
+        source_segment_id INTEGER REFERENCES meeting_segments(id)
+      );
+    `;
+    console.log("✅ open_questions table created");
+
+    // Phase 3: link meeting-derived RAG chunks back to their meeting/segment
+    // so "Ask this meeting" / "Ask across meetings" can cite sources.
+    // document_id stays nullable and unused for these rows - meeting chunks
+    // aren't backed by a `documents` row.
+    await sql`
+      ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS meeting_id INTEGER REFERENCES meetings(id) ON DELETE CASCADE;
+    `;
+    await sql`
+      ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS segment_id INTEGER REFERENCES meeting_segments(id) ON DELETE SET NULL;
+    `;
+    console.log("✅ document_chunks.meeting_id / segment_id columns added");
+
+    console.log("🎉 Meeting intelligence schema setup complete!");
+    return { success: true, message: "Meeting intelligence schema created successfully" };
+  } catch (error) {
+    console.error("❌ Meeting schema setup failed:", error);
+    return {
+      success: false,
+      message: error instanceof Error ? error.message : "Unknown error during setup"
+    };
+  }
+}
