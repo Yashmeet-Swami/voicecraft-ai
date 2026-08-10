@@ -160,11 +160,11 @@ Proposed for meetings — **explicit job table from Phase 1, not fire-and-forget
 
 **Shipped (Phase 1):** *lazy client-triggered processing*. When the dashboard/meeting-list page loads (or on an interval while the tab is open), the client calls `/api/jobs/process`. The endpoint atomically claims one `queued` job (`UPDATE ... SET status = 'running' WHERE status = 'queued' ... RETURNING`, guarding against a second concurrent claim), runs the pipeline (download → transcribe → clean → extract → write results), and marks `done`/`failed` with `attempts` incremented on failure. $0, no new infra — but only advances while someone has the app open, which is a real limitation, not just a stepping stone we're pretending not to notice.
 
-**Decision: the next step is a managed queue (Inngest), not external cron.** Two options were on the table for "make it advance without a tab open":
+**Decision: a managed queue (Inngest), not external cron — shipped in Phase 3.5.** Two options were on the table for "make it advance without a tab open":
 - *External cron* (GitHub Actions scheduled workflow, cron-job.org) hitting `/api/jobs/process` every 1–5 minutes — free, but it's a cron hack bolted onto a serverless app, not a real execution model. Rejected on those grounds, not on cost.
-- *A managed queue* (Inngest, Trigger.dev, or QStash) — a genuine worker/executor model: jobs get pushed to the service, it invokes your endpoint reliably with retries/backoff built in. **Inngest specifically** is the pick: 50,000 executions/month free (see §9) is enormous headroom at this scale, and it has a first-class Next.js integration (a single `/api/inngest` route handler). This is what "real" background processing looks like, and it's still $0.
+- *A managed queue* (Inngest, Trigger.dev, or QStash) — a genuine worker/executor model: an event gets sent to the service, it invokes your endpoint reliably with retries/backoff built in. **Inngest** was the pick: 50,000 executions/month free (see §9) is enormous headroom at this scale, and it has a first-class Next.js integration (a single `/api/inngest` route handler). This is what "real" background processing looks like, and it's still $0.
 
-We're intentionally *not* implementing this yet — the lazy-trigger mechanism is working, tested, and nothing has hit its limits. When we do the swap, it's a trigger-mechanism replacement under an unchanged `processing_jobs` contract (`processNextJob()` becomes the Inngest function body), not a schema migration or pipeline rewrite. Rejected the earlier "external cron as an interim step" idea entirely — if we're going to move off lazy-trigger, go straight to the real thing.
+The swap was exactly a trigger-mechanism replacement under an unchanged `processing_jobs` contract — `processNextJob()`'s body didn't change at all, only what calls it did (see §8, Phase 3.5). The lazy-trigger poller wasn't removed; it stays as a fallback in case an Inngest event is ever lost.
 
 (Vercel Cron itself was also considered and rejected outright, independent of the above: **Vercel's Hobby plan only permits cron schedules that run once per day** — anything more frequent fails at deploy time, and per-minute cron requires the paid Pro plan.)
 
@@ -215,11 +215,16 @@ Goal: meetings become a searchable organizational knowledge base.
 - Fixed a pre-existing gap along the way: `retrieveContext` had no per-user scoping; added it for the meeting pipeline so one user's meetings can't leak into another's extraction context.
 - `meeting_type`-specific extraction schemas remain deferred (see §4) — not yet needed.
 
-**Phase 3.5 — Real Background Worker (next up)**
+**Phase 3.5 — Real Background Worker ✅ Shipped**
 Goal: meetings process without anyone needing the app open, using an actual worker model instead of a page-triggered poll.
-- Swap the trigger in `/api/jobs/process` for an Inngest function — `processNextJob()`'s body doesn't change, only what calls it does (see §5's decision).
-- No schema changes required; `processing_jobs` already models queued/running/done/failed.
-- Not urgent — the lazy-trigger mechanism hasn't hit a real limit yet. Do this when it does, or when demoing the product to someone who won't have a tab open.
+- `lib/inngest/client.ts` + `lib/inngest/functions.ts` (`processMeetingJob`, triggered by a `meeting/processing.requested` event) + `app/api/inngest/route.ts` (Inngest's serve handler, excluded from Clerk auth in `middleware.ts` — same treatment as `/api/uploadthing`, since Inngest calls it directly with its own signing-key verification).
+- `createMeetingAction`/`retryMeetingAction` send the event right after queuing the job, so processing starts immediately instead of waiting for the next poll.
+- `processNextJob()`'s body and the `processing_jobs` contract didn't change at all — only what calls it did, exactly as planned.
+- **The lazy client-triggered poller (`job-poller.tsx`) was kept, not removed.** It's now a redundant fallback: if an Inngest event is ever lost or Inngest is unreachable/misconfigured in some environment, the poller still drains the queue on the next page load. Belt-and-suspenders, and it costs nothing to leave in.
+- Verified with a real event-driven run (not a direct function call): sent a `meeting/processing.requested` event, and confirmed via DB polling that the meeting went `uploaded → processing → ready` purely through the Inngest dev server invoking `/api/inngest` — proving the wiring, not just the underlying function.
+- **Required env vars for this to run:**
+  - Local dev: run `npx inngest-cli@latest dev -u http://localhost:<port>/api/inngest` alongside `npm run dev`, with `INNGEST_DEV=1` set for the Next.js process (without it, the SDK assumes cloud mode and every request 500s with "no signing key found").
+  - Production (Vercel): create a free Inngest account, then set `INNGEST_EVENT_KEY` and `INNGEST_SIGNING_KEY` in the project's environment variables. Without them, `inngest.send()` fails silently (caught) and the app falls back to the lazy poller — degraded but not broken.
 
 **Phase 4 — Collaboration**
 Goal: convert meeting information into actual work.
@@ -248,13 +253,13 @@ All services below have a permanent free tier (not a time-limited trial) that co
 | UploadThing | A few GB storage on free tier | Exceeding storage with many large test uploads left undeleted |
 | Clerk | Up to 10,000 MAU free | Not a realistic risk for a personal project |
 
-**Net effect on the plan:** no change to Phases 1–3.
+**Net effect on the plan:** no change to Phases 1–3.5.
 
-Phase 3.5's managed-queue options all have permanent free tiers, not just trials — verified: **Inngest** (50,000 executions/month, 5 concurrent steps — the pick, see §5), **Upstash QStash** (1,000 messages/day, then $1/100K), **Trigger.dev** ($0/month plan with $5 of included compute credit, 20 concurrent runs). Each comfortably covers a solo/portfolio-scale meeting app — a handful of meetings a day uses a tiny fraction of any of these caps. Unlike Vercel Cron's flat "once/day on Hobby, no exceptions" limit, these are usage-metered: cost only becomes possible if usage grows to real multi-user traffic (hundreds of meetings/day), at which point revisiting cost is reasonable, not before.
+**Inngest** (chosen in Phase 3.5) has a permanent free tier, not a trial: 50,000 executions/month, 5 concurrent steps — enormous headroom for a solo/portfolio-scale meeting app, where a handful of meetings a day uses a tiny fraction of that cap. The alternatives considered, also permanently free at this scale: **Upstash QStash** (1,000 messages/day, then $1/100K) and **Trigger.dev** ($0/month plan with $5 of included compute credit, 20 concurrent runs). Unlike Vercel Cron's flat "once/day on Hobby, no exceptions" limit, these are usage-metered: cost only becomes possible if usage grows to real multi-user traffic (hundreds of meetings/day), at which point revisiting cost is reasonable, not before.
 
 ## 10. Decisions made
 
 - **Blog feature:** keep it, but demote it. It stays as-is for now; per Phase 5 it becomes a secondary export ("turn this meeting into a blog recap") generated *from* meeting intelligence rather than a parallel product. Don't maintain two separate generation pipelines long-term.
 - **Diarization:** the Phase 1 → Phase 2 split (plain transcript first, speakers/timestamps after) was correct and is what shipped — diarization was real but never blocked the core loop.
-- **Job runner:** lazy client-trigger shipped for Phase 1 and stays until it's actually a problem. The next step, when needed, is Inngest (Phase 3.5) — not external cron. See §5 for the full reasoning; external cron was considered and rejected as a workaround rather than a real execution model.
+- **Job runner:** shipped Inngest (Phase 3.5) as the real trigger, on top of the still-working lazy-trigger fallback from Phase 1. External cron was considered and rejected as a workaround rather than a real execution model — see §5.
 - **`meeting_type`-adaptive extraction:** yes, eventually (engineering/sales/1:1-specific fields are a genuine differentiator), but explicitly after the uniform schema is proven — tracked as an enhancement under Phase 3, not started.

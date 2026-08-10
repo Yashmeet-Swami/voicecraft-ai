@@ -3,6 +3,19 @@
 import getDbConnection from "@/lib/db";
 import { currentUser } from "@clerk/nextjs/server";
 import { revalidatePath } from "next/cache";
+import { inngest } from "@/lib/inngest/client";
+
+// Best-effort nudge to the real worker (Phase 3.5). If Inngest isn't
+// reachable/configured, the lazy client-triggered poller (job-poller.tsx)
+// still drains the queue - this is a latency optimization, not the only
+// path to processing.
+async function notifyMeetingProcessing(meetingId: number): Promise<void> {
+  try {
+    await inngest.send({ name: "meeting/processing.requested", data: { meetingId } });
+  } catch (error) {
+    console.error(`Failed to send Inngest event for meeting ${meetingId}, lazy poller will pick it up instead.`, error);
+  }
+}
 
 export interface CreateMeetingInput {
   fileUrl: string;
@@ -44,6 +57,7 @@ export async function createMeetingAction(
       VALUES (${meetingId}, 'queued')
     `;
 
+    await notifyMeetingProcessing(meetingId);
     revalidatePath("/meetings");
 
     return {
@@ -113,6 +127,7 @@ export async function retryMeetingAction(meetingId: number) {
       VALUES (${meetingId}, 'queued')
     `;
 
+    await notifyMeetingProcessing(meetingId);
     revalidatePath(`/meetings/${meetingId}`);
     revalidatePath("/meetings");
 
