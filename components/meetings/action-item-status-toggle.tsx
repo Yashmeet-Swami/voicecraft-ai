@@ -15,10 +15,14 @@ const STATUS_LABELS: Record<Status, string> = {
   done: "Done",
 };
 
+// hover:bg-* is pinned explicitly on each status, not just the resting bg -
+// the global `button:hover` base style (app/globals.css) has higher CSS
+// specificity than a plain `.bg-*` utility, so without this the button would
+// flash purple on hover despite the correct resting color.
 const STATUS_STYLES: Record<Status, string> = {
-  open: "bg-gray-100 text-gray-600",
-  in_progress: "bg-yellow-100 text-yellow-700",
-  done: "bg-green-100 text-green-700",
+  open: "bg-gray-100 hover:bg-gray-100 text-gray-600",
+  in_progress: "bg-yellow-100 hover:bg-yellow-100 text-yellow-700",
+  done: "bg-green-100 hover:bg-green-100 text-green-700",
 };
 
 export default function ActionItemStatusToggle({

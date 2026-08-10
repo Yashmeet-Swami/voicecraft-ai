@@ -72,7 +72,7 @@ export default function NotificationBell() {
       <button
         type="button"
         onClick={() => setOpen((prev) => !prev)}
-        className="relative p-2 text-gray-600 hover:text-purple-600 transition-colors"
+        className="relative p-2 bg-transparent hover:bg-transparent text-gray-600 hover:text-purple-600 transition-colors"
         aria-label="Notifications"
       >
         <Bell className="w-5 h-5" />
@@ -91,7 +91,7 @@ export default function NotificationBell() {
               <button
                 type="button"
                 onClick={handleMarkAllRead}
-                className="text-xs text-purple-600 hover:text-purple-800"
+                className="bg-transparent hover:bg-transparent text-xs text-purple-600 hover:text-purple-800"
               >
                 Mark all read
               </button>

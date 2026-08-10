@@ -94,7 +94,7 @@ export default function ShareMeetingForm({
                 type="button"
                 onClick={() => handleRemove(c.userId)}
                 disabled={removingId === c.userId}
-                className="text-gray-400 hover:text-red-500"
+                className="bg-transparent hover:bg-transparent text-gray-400 hover:text-red-500"
                 aria-label={`Remove ${c.name}`}
               >
                 {removingId === c.userId ? (

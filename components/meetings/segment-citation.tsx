@@ -18,7 +18,7 @@ export default function SegmentCitation({
     <button
       type="button"
       onClick={() => jumpToSegment(segmentId)}
-      className="inline-flex items-center gap-1 text-xs text-purple-600 hover:text-purple-800 font-medium whitespace-nowrap"
+      className="inline-flex items-center gap-1 bg-transparent hover:bg-transparent text-xs text-purple-600 hover:text-purple-800 font-medium whitespace-nowrap"
     >
       <Clock className="w-3 h-3" />
       {startSeconds != null ? formatTimestamp(startSeconds) : "source"}

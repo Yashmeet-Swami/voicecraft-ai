@@ -97,7 +97,7 @@ export default function MeetingWorkspace({
             key={tab.id}
             onClick={() => setActiveId(tab.id)}
             className={cn(
-              "px-4 py-2 text-sm font-medium whitespace-nowrap border-b-2 transition-colors",
+              "px-4 py-2 text-sm font-medium whitespace-nowrap border-b-2 transition-colors bg-transparent hover:bg-transparent",
               activeId === tab.id
                 ? "border-purple-600 text-purple-600"
                 : "border-transparent text-gray-500 hover:text-gray-700"
