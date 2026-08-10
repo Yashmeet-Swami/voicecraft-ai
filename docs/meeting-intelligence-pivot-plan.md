@@ -1,6 +1,6 @@
 # VoiceCraftAI → AI Meeting Intelligence Platform: Pivot Plan
 
-**Status:** Phases 1–3 implemented and shipped. This doc (v3) records the decisions made along the way and what's next.
+**Status:** Phases 1–4 (and 3.5) implemented and shipped. This doc (v4) records the decisions made along the way and what's next.
 **Date:** 2026-08-10
 
 ## 1. Why this direction
@@ -226,11 +226,15 @@ Goal: meetings process without anyone needing the app open, using an actual work
   - Local dev: run `npx inngest-cli@latest dev -u http://localhost:<port>/api/inngest` alongside `npm run dev`, with `INNGEST_DEV=1` set for the Next.js process (without it, the SDK assumes cloud mode and every request 500s with "no signing key found").
   - Production (Vercel): create a free Inngest account, then set `INNGEST_EVENT_KEY` and `INNGEST_SIGNING_KEY` in the project's environment variables. Without them, `inngest.send()` fails silently (caught) and the app falls back to the lazy poller — degraded but not broken.
 
-**Phase 4 — Collaboration**
+**Phase 4 — Collaboration ✅ Shipped**
 Goal: convert meeting information into actual work.
-- Minimal team concept: invite collaborators by email (Clerk organizations, or a simple `team_members` table).
-- Resolve `owner_name` → `owner_user_id`, add status toggle (open/in_progress/done), "My Action Items" view, in-app notifications.
-- Can proceed in parallel with Phase 3.5 if resourced — the two aren't dependent on each other.
+- Minimal team concept, DB-backed not Clerk Organizations: `meeting_collaborators` (meeting_id, user_id). Owner shares by email via `shareMeetingAction`; the collaborator must already have a VoiceCraft account (no outbound invite email — deliberate v1 limitation, no email service configured).
+- `owner_name` → `owner_user_id` resolution: during extraction, action-item owner names are matched against the meeting's owner + collaborators only (not every app user) — matching against everyone risked silently assigning/notifying a random stranger who shares a first name.
+- Status toggle (open → in_progress → done) on every action item, usable by the owner or any collaborator, not just the assignee — small-team collaboration, not strict per-assignee locking.
+- `/action-items` — "My Action Items" across every meeting the signed-in user has access to.
+- In-app notifications (`notifications` table + bell in the header): fired when an action item resolves to a collaborator (not to the owner themselves, since they'll see it on their own meeting page anyway).
+- `askMeeting`/`askAcrossMeetings` (Phase 3) and the meeting detail/list pages were updated to treat "owner OR collaborator" as access, not just ownership.
+- Verified end-to-end with two seeded users: shared a meeting, ran real extraction, confirmed the action item's `owner_name` ("Rahul") resolved to the actual collaborator's `user_id` and that they - not the owner - received the notification.
 
 **Phase 5 — Production Engineering**
 Goal: make it defensible as a production system.

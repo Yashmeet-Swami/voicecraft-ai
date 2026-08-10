@@ -138,3 +138,96 @@ export async function retryMeetingAction(meetingId: number) {
     return { success: false, message: `Failed to retry meeting: ${message}` };
   }
 }
+
+// Share a meeting with another registered user by email. Owner-only. No
+// outbound email is sent - the collaborator must already have an account
+// (i.e. have visited /dashboard at least once, which is when `users` gets
+// populated). This is a deliberate v1 limitation, not an oversight - see
+// docs/meeting-intelligence-pivot-plan.md §8, Phase 4.
+export async function shareMeetingAction(meetingId: number, email: string) {
+  try {
+    const user = await currentUser();
+    if (!user) {
+      return { success: false, message: "Unauthorized. Please sign in." };
+    }
+
+    const normalizedEmail = email.trim().toLowerCase();
+    if (!normalizedEmail) {
+      return { success: false, message: "Please enter an email address." };
+    }
+
+    const sql = await getDbConnection();
+
+    const [meeting] = await sql`
+      SELECT id FROM meetings WHERE id = ${meetingId} AND user_id = ${user.id}
+    `;
+    if (!meeting) {
+      return {
+        success: false,
+        message: "Meeting not found or you do not have permission to share it.",
+      };
+    }
+
+    const [collaborator] = await sql`
+      SELECT user_id, full_name FROM users WHERE LOWER(email) = ${normalizedEmail}
+    `;
+    if (!collaborator) {
+      return {
+        success: false,
+        message: "No VoiceCraft user found with that email yet. They need to sign in at least once first.",
+      };
+    }
+
+    if (collaborator.user_id === user.id) {
+      return { success: false, message: "You already own this meeting." };
+    }
+
+    await sql`
+      INSERT INTO meeting_collaborators (meeting_id, user_id)
+      VALUES (${meetingId}, ${collaborator.user_id})
+      ON CONFLICT (meeting_id, user_id) DO NOTHING
+    `;
+
+    revalidatePath(`/meetings/${meetingId}`);
+
+    return {
+      success: true,
+      message: `Shared with ${collaborator.full_name || normalizedEmail}.`,
+    };
+  } catch (error) {
+    console.error("Error sharing meeting:", error);
+    const message = error instanceof Error ? error.message : "Unknown error occurred";
+    return { success: false, message: `Failed to share meeting: ${message}` };
+  }
+}
+
+export async function removeCollaboratorAction(meetingId: number, collaboratorUserId: string) {
+  try {
+    const user = await currentUser();
+    if (!user) {
+      return { success: false, message: "Unauthorized. Please sign in." };
+    }
+
+    const sql = await getDbConnection();
+    const [meeting] = await sql`
+      SELECT id FROM meetings WHERE id = ${meetingId} AND user_id = ${user.id}
+    `;
+    if (!meeting) {
+      return {
+        success: false,
+        message: "Meeting not found or you do not have permission to manage it.",
+      };
+    }
+
+    await sql`
+      DELETE FROM meeting_collaborators WHERE meeting_id = ${meetingId} AND user_id = ${collaboratorUserId}
+    `;
+
+    revalidatePath(`/meetings/${meetingId}`);
+    return { success: true, message: "Collaborator removed." };
+  } catch (error) {
+    console.error("Error removing collaborator:", error);
+    const message = error instanceof Error ? error.message : "Unknown error occurred";
+    return { success: false, message: `Failed to remove collaborator: ${message}` };
+  }
+}

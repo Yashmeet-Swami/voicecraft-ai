@@ -8,11 +8,14 @@ import MeetingWorkspace, { type MeetingSegmentData } from "@/components/meetings
 import TimelineView from "@/components/meetings/timeline-view";
 import SegmentCitation from "@/components/meetings/segment-citation";
 import AskPanel from "@/components/meetings/ask-panel";
+import ShareMeetingForm from "@/components/meetings/share-meeting-form";
+import ActionItemStatusToggle from "@/components/meetings/action-item-status-toggle";
 import { askMeeting } from "@/actions/knowledge-actions";
 import { formatTimestamp } from "@/lib/utils";
 
 interface Meeting {
   id: number;
+  user_id: string;
   title: string;
   status: string;
   summary: string | null;
@@ -86,9 +89,15 @@ export default async function MeetingDetailPage({
   const sql = await getDbConnection();
 
   const meetings = (await sql`
-    SELECT id, title, status, summary, audio_url, duration_seconds, created_at
-    FROM meetings
-    WHERE id = ${id} AND user_id = ${user.id}
+    SELECT m.id, m.user_id, m.title, m.status, m.summary, m.audio_url, m.duration_seconds, m.created_at
+    FROM meetings m
+    WHERE m.id = ${id}
+      AND (
+        m.user_id = ${user.id}
+        OR EXISTS (
+          SELECT 1 FROM meeting_collaborators mc WHERE mc.meeting_id = m.id AND mc.user_id = ${user.id}
+        )
+      )
   `) as unknown as Meeting[];
 
   if (!meetings || meetings.length === 0) {
@@ -100,9 +109,10 @@ export default async function MeetingDetailPage({
   }
 
   const meeting = meetings[0];
+  const isOwner = meeting.user_id === user.id;
   const isPending = meeting.status === "uploaded" || meeting.status === "processing";
 
-  const [transcripts, decisions, actionItems, openQuestions, segments] = await Promise.all([
+  const [transcripts, decisions, actionItems, openQuestions, segments, collaboratorRows] = await Promise.all([
     sql`SELECT raw_text, cleaned_text FROM transcripts WHERE meeting_id = ${meeting.id}` as unknown as Promise<
       Transcript[]
     >,
@@ -133,9 +143,21 @@ export default async function MeetingDetailPage({
       WHERE meeting_id = ${meeting.id}
       ORDER BY segment_index ASC
     ` as unknown as Promise<MeetingSegmentData[]>,
+    (isOwner
+      ? sql`
+          SELECT mc.user_id, u.full_name
+          FROM meeting_collaborators mc
+          LEFT JOIN users u ON u.user_id = mc.user_id
+          WHERE mc.meeting_id = ${meeting.id}
+        `
+      : Promise.resolve([])) as unknown as Promise<{ user_id: string; full_name: string | null }[]>,
   ]);
 
   const transcript = transcripts[0];
+  const collaborators = collaboratorRows.map((c) => ({
+    userId: c.user_id,
+    name: c.full_name || c.user_id,
+  }));
 
   const tabs = [
     {
@@ -184,9 +206,7 @@ export default async function MeetingDetailPage({
                 </p>
               </div>
               <div className="flex items-center gap-3">
-                <span className="text-xs font-medium px-2 py-1 rounded-full bg-gray-100 text-gray-600 whitespace-nowrap">
-                  {item.status}
-                </span>
+                <ActionItemStatusToggle actionItemId={item.id} status={item.status} />
                 <SegmentCitation segmentId={item.source_segment_id} startSeconds={item.start_seconds} />
               </div>
             </div>
@@ -262,6 +282,12 @@ export default async function MeetingDetailPage({
           <StatusPill status={meeting.status} />
         </div>
 
+        {isOwner && (
+          <div className="mb-6 max-w-md">
+            <ShareMeetingForm meetingId={meeting.id} collaborators={collaborators} />
+          </div>
+        )}
+
         {isPending ? (
           <div className="bg-white rounded-xl p-8 text-center shadow-sm border">
             <div className="w-3 h-3 bg-purple-500 rounded-full animate-pulse mx-auto mb-4"></div>
@@ -274,7 +300,11 @@ export default async function MeetingDetailPage({
         ) : meeting.status === "failed" ? (
           <div className="bg-white rounded-xl p-8 text-center shadow-sm border border-red-200">
             <p className="text-red-600 mb-4">Processing failed for this meeting.</p>
-            <RetryMeetingButton meetingId={meeting.id} />
+            {isOwner ? (
+              <RetryMeetingButton meetingId={meeting.id} />
+            ) : (
+              <p className="text-sm text-gray-500">Ask the meeting owner to retry processing.</p>
+            )}
           </div>
         ) : (
           <MeetingWorkspace

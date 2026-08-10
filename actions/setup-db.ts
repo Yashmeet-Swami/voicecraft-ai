@@ -163,6 +163,35 @@ export async function setupMeetingsSchema() {
     `;
     console.log("✅ document_chunks.meeting_id / segment_id columns added");
 
+    // Phase 4: lightweight collaboration - share a meeting with another
+    // registered user (by email, resolved against `users`), assign action
+    // items to them, and notify them in-app. No Clerk Organizations, no
+    // outbound email - deliberately minimal per docs/meeting-intelligence-
+    // pivot-plan.md §8, Phase 4.
+    await sql`
+      CREATE TABLE IF NOT EXISTS meeting_collaborators (
+        id SERIAL PRIMARY KEY,
+        meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL,
+        added_at TIMESTAMPTZ DEFAULT now(),
+        UNIQUE (meeting_id, user_id)
+      );
+    `;
+    console.log("✅ meeting_collaborators table created");
+
+    await sql`
+      CREATE TABLE IF NOT EXISTS notifications (
+        id SERIAL PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        meeting_id INTEGER REFERENCES meetings(id) ON DELETE CASCADE,
+        action_item_id INTEGER REFERENCES action_items(id) ON DELETE CASCADE,
+        message TEXT NOT NULL,
+        is_read BOOLEAN NOT NULL DEFAULT false,
+        created_at TIMESTAMPTZ DEFAULT now()
+      );
+    `;
+    console.log("✅ notifications table created");
+
     console.log("🎉 Meeting intelligence schema setup complete!");
     return { success: true, message: "Meeting intelligence schema created successfully" };
   } catch (error) {

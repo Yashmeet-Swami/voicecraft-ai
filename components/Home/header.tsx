@@ -4,6 +4,7 @@ import { SignedIn, SignedOut, SignInButton, UserButton } from "@clerk/nextjs";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import NotificationBell from "@/components/notifications/notification-bell";
 
 const NavLink = ({
   href,
@@ -69,6 +70,7 @@ export default function Header() {
         <SignedIn>
           <NavLink href="/posts">Your Posts</NavLink>
           <NavLink href="/meetings">Meetings</NavLink>
+          <NavLink href="/action-items">My Action Items</NavLink>
         </SignedIn>
       </div>
 
@@ -76,6 +78,7 @@ export default function Header() {
         <SignedIn>
           <div className="flex items-center gap-2">
             <NavLink href="/dashboard">Upload a Video</NavLink>
+            <NotificationBell />
             <UserButton />
           </div>
         </SignedIn>

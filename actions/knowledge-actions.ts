@@ -328,7 +328,12 @@ export async function askMeeting(meetingId: number, question: string): Promise<A
     try {
         const sql = await getDbConnection();
         const [meeting] = await sql`
-            SELECT id, title FROM meetings WHERE id = ${meetingId} AND user_id = ${user.id}
+            SELECT m.id, m.title
+            FROM meetings m
+            WHERE m.id = ${meetingId}
+              AND (m.user_id = ${user.id} OR EXISTS (
+                SELECT 1 FROM meeting_collaborators mc WHERE mc.meeting_id = m.id AND mc.user_id = ${user.id}
+              ))
         `;
         if (!meeting) {
             return { success: false, message: "Meeting not found." };
@@ -375,7 +380,8 @@ export async function askMeeting(meetingId: number, question: string): Promise<A
 }
 
 // "Ask across meetings" - answers a question grounded in every meeting the
-// current user owns, citing which meeting/timestamp each part came from.
+// current user owns or has been given access to, citing which
+// meeting/timestamp each part came from.
 export async function askAcrossMeetings(question: string): Promise<AskResult> {
     const user = await currentUser();
     if (!user) {
@@ -397,6 +403,9 @@ export async function askAcrossMeetings(question: string): Promise<AskResult> {
             JOIN meetings m ON m.id = dc.meeting_id
             LEFT JOIN meeting_segments ms ON ms.id = dc.segment_id
             WHERE m.user_id = ${user.id}
+               OR EXISTS (
+                 SELECT 1 FROM meeting_collaborators mc WHERE mc.meeting_id = m.id AND mc.user_id = ${user.id}
+               )
             ORDER BY distance ASC
             LIMIT 6
         `;

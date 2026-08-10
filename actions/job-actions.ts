@@ -32,6 +32,38 @@ function resolveSegmentId(segmentIds: number[], index: number | null): number | 
   return segmentIds[index];
 }
 
+interface OwnerCandidate {
+  user_id: string;
+  full_name: string;
+}
+
+// Matches an extracted owner name (e.g. "Rahul") against registered users
+// who actually have access to this meeting (the owner + its collaborators -
+// see meeting_collaborators, Phase 4). Deliberately scoped to that small set
+// rather than every user in the app: matching against everyone risks
+// silently assigning/notifying a random stranger who happens to share a
+// first name.
+function matchOwnerName(ownerName: string, candidates: OwnerCandidate[]): string | null {
+  const normalized = ownerName.trim().toLowerCase();
+  if (!normalized) return null;
+
+  for (const candidate of candidates) {
+    const fullName = (candidate.full_name || "").trim().toLowerCase();
+    if (!fullName) continue;
+    const firstName = fullName.split(/\s+/)[0];
+    if (
+      fullName === normalized ||
+      firstName === normalized ||
+      fullName.includes(normalized) ||
+      normalized.includes(fullName)
+    ) {
+      return candidate.user_id;
+    }
+  }
+
+  return null;
+}
+
 // Runs diarized/timestamped transcription; falls back to plain transcription
 // wrapped as a single untimestamped segment if the model can't produce
 // usable segments (see docs/meeting-intelligence-pivot-plan.md §3.1.2, §7 -
@@ -165,12 +197,38 @@ export async function processNextJob(): Promise<ProcessJobResult> {
       `;
     }
 
+    // Candidates for owner-name resolution: the meeting owner + anyone
+    // it's been shared with (Phase 4). Fetched once, reused per item.
+    const ownerCandidates = (await sql`
+      SELECT u.user_id, u.full_name
+      FROM users u
+      WHERE u.user_id = ${meeting.user_id}
+         OR u.user_id IN (SELECT user_id FROM meeting_collaborators WHERE meeting_id = ${meetingId})
+    `) as unknown as OwnerCandidate[];
+
     for (const item of extraction.action_items) {
       const sourceSegmentId = resolveSegmentId(segmentIds, item.segment_index);
-      await sql`
-        INSERT INTO action_items (meeting_id, task, owner_name, due_date, source_segment_id)
-        VALUES (${meetingId}, ${item.task}, ${item.owner}, ${normalizeDueDate(item.due_date)}, ${sourceSegmentId})
+      const resolvedOwnerUserId = item.owner ? matchOwnerName(item.owner, ownerCandidates) : null;
+
+      const [insertedItem] = await sql`
+        INSERT INTO action_items (meeting_id, task, owner_name, owner_user_id, due_date, source_segment_id)
+        VALUES (${meetingId}, ${item.task}, ${item.owner}, ${resolvedOwnerUserId}, ${normalizeDueDate(item.due_date)}, ${sourceSegmentId})
+        RETURNING id
       `;
+
+      // Notify the assignee, unless they're the meeting owner (who will see
+      // it immediately on their own meeting page anyway).
+      if (resolvedOwnerUserId && resolvedOwnerUserId !== meeting.user_id) {
+        await sql`
+          INSERT INTO notifications (user_id, meeting_id, action_item_id, message)
+          VALUES (
+            ${resolvedOwnerUserId},
+            ${meetingId},
+            ${insertedItem.id},
+            ${`You were assigned "${item.task}" in "${meeting.title}"`}
+          )
+        `;
+      }
     }
 
     for (const question of extraction.open_questions) {
