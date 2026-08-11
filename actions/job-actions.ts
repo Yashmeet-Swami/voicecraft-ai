@@ -10,6 +10,7 @@ import {
 import { retrieveContext, ingestMeetingSegments } from "@/actions/knowledge-actions";
 import { extractMeetingIntelligence } from "@/actions/meeting-extraction";
 import { formatTimestamp } from "@/lib/utils";
+import { logUsageEvent } from "@/lib/usage-tracking";
 
 export interface ProcessJobResult {
   processed: boolean;
@@ -253,6 +254,7 @@ export async function processNextJob(): Promise<ProcessJobResult> {
       WHERE id = ${job.id}
     `;
 
+    await logUsageEvent(meeting.user_id as string, "meeting_processing_succeeded", null, null);
     return { processed: true, meetingId, status: "ready" };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown processing error";

@@ -10,6 +10,7 @@ import SegmentCitation from "@/components/meetings/segment-citation";
 import AskPanel from "@/components/meetings/ask-panel";
 import ShareMeetingForm from "@/components/meetings/share-meeting-form";
 import ActionItemStatusToggle from "@/components/meetings/action-item-status-toggle";
+import GenerateRecapButton from "@/components/meetings/generate-recap-button";
 import { askMeeting } from "@/actions/knowledge-actions";
 import { formatTimestamp } from "@/lib/utils";
 
@@ -164,8 +165,13 @@ export default async function MeetingDetailPage({
       id: "summary",
       label: "Summary",
       content: (
-        <div className="bg-white p-6 rounded-lg shadow-sm border whitespace-pre-wrap text-gray-700">
-          {meeting.summary || "No summary available."}
+        <div className="space-y-4">
+          <div className="bg-white p-6 rounded-lg shadow-sm border whitespace-pre-wrap text-gray-700">
+            {meeting.summary || "No summary available."}
+          </div>
+          <div className="flex justify-end">
+            <GenerateRecapButton meetingId={meeting.id} />
+          </div>
         </div>
       ),
     },

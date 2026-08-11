@@ -4,6 +4,7 @@ import { SignedIn, SignedOut, SignInButton, UserButton } from "@clerk/nextjs";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { BarChart3 } from "lucide-react";
 import NotificationBell from "@/components/notifications/notification-bell";
 
 const NavLink = ({
@@ -79,7 +80,15 @@ export default function Header() {
           <div className="flex items-center gap-2">
             <NavLink href="/dashboard">Upload a Video</NavLink>
             <NotificationBell />
-            <UserButton />
+            <UserButton>
+              <UserButton.MenuItems>
+                <UserButton.Link
+                  label="Usage"
+                  labelIcon={<BarChart3 className="w-4 h-4" />}
+                  href="/usage"
+                />
+              </UserButton.MenuItems>
+            </UserButton>
           </div>
         </SignedIn>
         <SignedOut>

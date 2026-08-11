@@ -16,8 +16,15 @@ export interface GeminiCandidate {
   [key: string]: unknown;
 }
 
+export interface GeminiUsageMetadata {
+  promptTokenCount?: number;
+  candidatesTokenCount?: number;
+  totalTokenCount?: number;
+}
+
 export interface GeminiResponse {
   candidates?: GeminiCandidate[];
+  usageMetadata?: GeminiUsageMetadata;
 }
 
 interface RetryConfig {
@@ -224,4 +231,112 @@ export async function callGeminiAPIWithRetry(
   }
 
   throw lastError || new Error("Unknown error during API call");
+}
+
+export interface UploadedGeminiFile {
+  name: string; // e.g. "files/abc123" - used for status polling / deletion
+  uri: string; // used as fileData.fileUri in generateContent
+}
+
+// Uploads a file to Gemini's File API (resumable upload protocol) instead of
+// inline base64 - removes the ~20MB inline-request ceiling entirely (File
+// API supports up to 2GB), which is what actually gates "long meeting"
+// support (see docs/meeting-intelligence-pivot-plan.md §3.1, Phase 5).
+export async function uploadFileToGemini(
+  buffer: Buffer,
+  mimeType: string,
+  displayName: string
+): Promise<UploadedGeminiFile> {
+  if (!GEMINI_API_KEY) {
+    throw new Error("GEMINI_API_KEY environment variable is not set");
+  }
+
+  const startUrl = `https://generativelanguage.googleapis.com/upload/v1beta/files?key=${GEMINI_API_KEY}`;
+
+  const startResponse = await fetch(startUrl, {
+    method: "POST",
+    headers: {
+      "X-Goog-Upload-Protocol": "resumable",
+      "X-Goog-Upload-Command": "start",
+      "X-Goog-Upload-Header-Content-Length": String(buffer.byteLength),
+      "X-Goog-Upload-Header-Content-Type": mimeType,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ file: { display_name: displayName } }),
+  });
+
+  if (!startResponse.ok) {
+    const details = await startResponse.text().catch(() => "");
+    throw new Error(`Failed to start Gemini file upload: ${startResponse.status} ${details}`);
+  }
+
+  const uploadUrl = startResponse.headers.get("x-goog-upload-url");
+  if (!uploadUrl) {
+    throw new Error("Gemini file upload did not return an upload URL");
+  }
+
+  const uploadResponse = await fetch(uploadUrl, {
+    method: "POST",
+    headers: {
+      "Content-Length": String(buffer.byteLength),
+      "X-Goog-Upload-Offset": "0",
+      "X-Goog-Upload-Command": "upload, finalize",
+    },
+    body: new Uint8Array(buffer),
+  });
+
+  if (!uploadResponse.ok) {
+    const details = await uploadResponse.text().catch(() => "");
+    throw new Error(`Failed to upload file bytes to Gemini: ${uploadResponse.status} ${details}`);
+  }
+
+  const result = await uploadResponse.json();
+  const file = result?.file;
+  if (!file?.uri || !file?.name) {
+    throw new Error("Gemini file upload response missing file uri/name");
+  }
+
+  return { name: file.name as string, uri: file.uri as string };
+}
+
+// Audio/video files need a moment to leave PROCESSING state before they can
+// be referenced in generateContent. Polls until ACTIVE or a timeout.
+export async function waitForGeminiFileActive(
+  fileName: string,
+  timeoutMs: number = 60_000
+): Promise<void> {
+  if (!GEMINI_API_KEY) {
+    throw new Error("GEMINI_API_KEY environment variable is not set");
+  }
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/${fileName}?key=${GEMINI_API_KEY}`;
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`Failed to check Gemini file status: ${response.status}`);
+    }
+    const data = await response.json();
+    if (data.state === "ACTIVE") return;
+    if (data.state === "FAILED") {
+      throw new Error("Gemini file processing failed");
+    }
+    await sleep(2000);
+  }
+
+  throw new Error("Timed out waiting for Gemini file to become ACTIVE");
+}
+
+// Best-effort cleanup - Gemini auto-expires files after 48h anyway, so a
+// failure here should never break the calling flow.
+export async function deleteGeminiFile(fileName: string): Promise<void> {
+  if (!GEMINI_API_KEY) return;
+  try {
+    await fetch(`https://generativelanguage.googleapis.com/v1beta/${fileName}?key=${GEMINI_API_KEY}`, {
+      method: "DELETE",
+    });
+  } catch (error) {
+    console.warn(`Failed to delete Gemini file ${fileName} (will auto-expire in 48h):`, error);
+  }
 }

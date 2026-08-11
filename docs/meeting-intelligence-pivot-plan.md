@@ -1,6 +1,6 @@
 # VoiceCraftAI → AI Meeting Intelligence Platform: Pivot Plan
 
-**Status:** Phases 1–4 (and 3.5) implemented and shipped. This doc (v4) records the decisions made along the way and what's next.
+**Status:** Phases 1–5 (and 3.5) implemented and shipped. This doc (v5) records the decisions made along the way. The only things left unimplemented are the ones explicitly deferred throughout (meeting_type-adaptive extraction schemas, third-party integrations).
 **Date:** 2026-08-10
 
 ## 1. Why this direction
@@ -236,11 +236,14 @@ Goal: convert meeting information into actual work.
 - `askMeeting`/`askAcrossMeetings` (Phase 3) and the meeting detail/list pages were updated to treat "owner OR collaborator" as access, not just ownership.
 - Verified end-to-end with two seeded users: shared a meeting, ran real extraction, confirmed the action item's `owner_name` ("Rahul") resolved to the actual collaborator's `user_id` and that they - not the owner - received the notification.
 
-**Phase 5 — Production Engineering**
+**Phase 5 — Production Engineering ✅ Shipped**
 Goal: make it defensible as a production system.
-- Chunked upload/transcription for long meetings (>20MB / >~15min).
-- Worker concurrency limits, rate limiting, LLM cost/usage tracking, observability.
-- Reconsider `posts` (blog) feature: keep as secondary export ("turn this meeting into a blog recap") or retire.
+- **Long meetings solved via Gemini's File API, not manual chunking.** The old ~20MB cap came from inlining base64 bytes directly into the generateContent request. Switched `transcribeUploadedFile`/`transcribeMeetingSegments` to upload via Gemini's resumable File API instead (supports up to 2GB), then reference the file by URI. No audio splitting, no timestamp-offset math to get wrong - a better solution than the "chunked transcription" originally planned, not a partial implementation of it. Files are deleted from Gemini after use (best-effort; they auto-expire in 48h regardless). Raised UploadThing's own caps to 256MB audio / 512MB video to match, and updated both upload forms' client-side validation and copy accordingly.
+- **Usage tracking + rate limiting**, sharing one `usage_events` table (`lib/usage-tracking.ts`): `logUsageEvent` records every ask/meeting-creation/recap-generation event (with token counts where cheaply available from Gemini's `usageMetadata`); `checkRateLimit` guards `askMeeting`/`askAcrossMeetings` (15 per 10 min), `createMeetingAction` (10 per 30 min), and recap generation (10 per hour) against a single user's rapid-fire clicking or a broken retry loop burning the shared free-tier quota. Not a per-project rate limiter - a guard against the realistic failure mode at this app's scale.
+- **`/usage` observability page** (linked from the user menu): per-event-type call counts and token totals for the last 24h/7d, plus a recent-activity log. Deliberately not a billing dashboard - the free tier doesn't bill, so this is about quota awareness, not cost.
+- **Inngest `concurrency: { limit: 2 }`** added to `processMeetingJob` - caps how many jobs run in parallel across concurrently-arriving events, on top of `processNextJob()`'s existing `FOR UPDATE SKIP LOCKED` (which already prevents two workers claiming the *same* job, but not multiple *different* jobs running at once).
+- **Blog feature: kept, demoted to an export.** `generateBlogRecapAction` generates a Markdown blog post from a meeting's summary/decisions/action items/questions (not from the raw transcript) and saves it into the same `posts` table the original standalone blog pipeline used - triggered by a "Generate Blog Recap" button on the meeting's Summary tab. The original transcript-to-blog pipeline (`/dashboard`) is untouched and still works independently; nothing was retired.
+- Verified end-to-end: rate-limit boundary (allowed at 3/5, blocked at 8/5), the `/usage` aggregation query, a full real meeting-processing run logging `meeting_processing_succeeded`, and a real blog recap generation logging token counts and producing a valid post.
 
 **Explicitly out of scope until the core flow (Phases 1–4) is solid:** Slack, Jira, Zoom, Google Calendar, or email integrations. They inflate scope without validating the core product; add one (Jira or Slack) after, not before.
 

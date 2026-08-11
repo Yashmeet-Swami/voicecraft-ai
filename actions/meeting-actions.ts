@@ -4,6 +4,7 @@ import getDbConnection from "@/lib/db";
 import { currentUser } from "@clerk/nextjs/server";
 import { revalidatePath } from "next/cache";
 import { inngest } from "@/lib/inngest/client";
+import { logUsageEvent, checkRateLimit } from "@/lib/usage-tracking";
 
 // Best-effort nudge to the real worker (Phase 3.5). If Inngest isn't
 // reachable/configured, the lazy client-triggered poller (job-poller.tsx)
@@ -41,6 +42,17 @@ export async function createMeetingAction(
     return { success: false, message: "No file URL provided." };
   }
 
+  // Each upload triggers a full transcription + extraction pipeline (several
+  // Gemini calls) - cap how fast one user can queue those up, protecting the
+  // shared free-tier quota from a runaway retry loop or accidental spam.
+  const rateLimit = await checkRateLimit(user.id, "meeting_created", 10, 30);
+  if (!rateLimit.allowed) {
+    return {
+      success: false,
+      message: `You've uploaded ${rateLimit.count} meetings in the last 30 minutes (limit ${rateLimit.limit}). Please wait a bit before uploading more.`,
+    };
+  }
+
   try {
     const sql = await getDbConnection();
 
@@ -57,6 +69,7 @@ export async function createMeetingAction(
       VALUES (${meetingId}, 'queued')
     `;
 
+    await logUsageEvent(user.id, "meeting_created", null, null);
     await notifyMeetingProcessing(meetingId);
     revalidatePath("/meetings");
 

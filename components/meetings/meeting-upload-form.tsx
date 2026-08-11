@@ -12,7 +12,10 @@ import { useRouter } from "next/navigation";
 const schema = z.object({
   file: z
     .instanceof(File, { message: "Invalid file" })
-    .refine((file) => file.size <= 20 * 1024 * 1024, "File size must not exceed 20MB")
+    .refine(
+      (file) => file.size <= (file.type.startsWith("video/") ? 512 : 256) * 1024 * 1024,
+      "File is too large (max 256MB audio / 512MB video)"
+    )
     .refine(
       (file) => file.type.startsWith("audio/") || file.type.startsWith("video/"),
       "File must be an audio or a video file"
@@ -191,7 +194,7 @@ export default function MeetingUploadForm() {
                 <span>Video</span>
               </div>
               <div className="w-1 h-1 bg-gray-300 rounded-full"></div>
-              <span>Max 20MB</span>
+              <span>Max 256MB audio / 512MB video</span>
             </div>
           </div>
         ) : (

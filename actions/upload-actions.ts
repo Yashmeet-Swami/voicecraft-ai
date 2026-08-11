@@ -3,7 +3,14 @@
 import getDbConnection from "@/lib/db";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { callGeminiAPIWithRetry, extractTextFromGeminiResponse, sleep } from "@/lib/gemini";
+import {
+  callGeminiAPIWithRetry,
+  extractTextFromGeminiResponse,
+  uploadFileToGemini,
+  waitForGeminiFileActive,
+  deleteGeminiFile,
+  sleep,
+} from "@/lib/gemini";
 
 // Prefer stable models in production; can be overridden via env
 const GEMINI_TRANSCRIBE_MODEL =
@@ -60,7 +67,8 @@ function getMimeType(fileName: string): string {
 }
 
 interface PreparedFile {
-  base64Data: string;
+  fileUri: string;
+  geminiFileName: string; // for cleanup via deleteGeminiFile
   mimeType: string;
   isAudio: boolean;
   isVideo: boolean;
@@ -68,8 +76,11 @@ interface PreparedFile {
 }
 
 // Shared by transcribeUploadedFile and transcribeMeetingSegments: download
-// from the upload host, size-check, and base64-encode for a Gemini
-// inlineData part.
+// from the upload host, then hand off to Gemini's File API rather than
+// inlining base64 bytes into the request. This removes the old ~20MB
+// inline-request ceiling (File API supports up to 2GB) - see
+// docs/meeting-intelligence-pivot-plan.md §3.1/§8 (Phase 5, long meetings).
+// Caller is responsible for deleteGeminiFile(geminiFileName) once done.
 async function prepareFileForGemini(fileUrl: string, fileName: string): Promise<PreparedFile> {
   const mimeType = getMimeType(fileName || "");
   const isAudio = mimeType.startsWith('audio/');
@@ -103,16 +114,18 @@ async function prepareFileForGemini(fileUrl: string, fileName: string): Promise<
   const fileSizeMB = (arrayBuffer.byteLength / (1024 * 1024)).toFixed(2);
   console.log(`✅ File downloaded successfully: ${fileSizeMB}MB`);
 
-  const maxSizeBytes = 20 * 1024 * 1024;
+  const maxSizeBytes = 500 * 1024 * 1024; // sanity cap well under Gemini's 2GB File API limit
   if (arrayBuffer.byteLength > maxSizeBytes) {
-    throw new Error(`File too large (${fileSizeMB}MB). Please use files smaller than 20MB.`);
+    throw new Error(`File too large (${fileSizeMB}MB). Please use files smaller than 500MB.`);
   }
 
-  console.log("🔄 Converting to Base64 for Gemini API...");
-  const base64Data = Buffer.from(arrayBuffer).toString('base64');
-  console.log(`✅ Base64 conversion complete: ${(base64Data.length / 1024).toFixed(0)}KB encoded`);
+  console.log("⬆️ Uploading to Gemini File API...");
+  const uploaded = await uploadFileToGemini(Buffer.from(arrayBuffer), mimeType, fileName || "recording");
+  console.log(`✅ Uploaded to Gemini as ${uploaded.name}, waiting for it to become ACTIVE...`);
+  await waitForGeminiFileActive(uploaded.name);
+  console.log("✅ Gemini file is ACTIVE and ready to use");
 
-  return { base64Data, mimeType, isAudio, isVideo, fileSizeMB };
+  return { fileUri: uploaded.uri, geminiFileName: uploaded.name, mimeType, isAudio, isVideo, fileSizeMB };
 }
 
 // Transcribe uploaded file using Gemini API with retry logic
@@ -133,24 +146,25 @@ export async function transcribeUploadedFile(
     console.log("📁 File URL:", fileUrl);
     console.log("📝 File Name:", fileName || "Unknown");
 
-    const { base64Data, mimeType, isAudio, fileSizeMB } = await prepareFileForGemini(
+    const { fileUri, geminiFileName, mimeType, isAudio, fileSizeMB } = await prepareFileForGemini(
       fileUrl,
       fileName || ""
     );
 
-    // Prepare request body
-    const requestBody: Record<string, unknown> = {
-      contents: [
-        {
-          parts: [
-            {
-              inlineData: {
-                data: base64Data,
-                mimeType: mimeType
-              }
-            },
-            {
-              text: `Please carefully transcribe all spoken words from this ${isAudio ? 'audio' : 'video'} file.
+    let rawData;
+    try {
+      const requestBody: Record<string, unknown> = {
+        contents: [
+          {
+            parts: [
+              {
+                fileData: {
+                  fileUri,
+                  mimeType: mimeType
+                }
+              },
+              {
+                text: `Please carefully transcribe all spoken words from this ${isAudio ? 'audio' : 'video'} file.
 
 Instructions:
 - Extract ALL spoken words accurately
@@ -162,20 +176,22 @@ Instructions:
 - Do not add any commentary, just provide the raw transcription
 
 Transcribe everything you hear:`
-            }
-          ]
+              }
+            ]
+          }
+        ],
+        generationConfig: {
+          temperature: 0.1,
+          maxOutputTokens: 4096,
+          topP: 0.8,
+          topK: 40
         }
-      ],
-      generationConfig: {
-        temperature: 0.1,
-        maxOutputTokens: 4096,
-        topP: 0.8,
-        topK: 40
-      }
-    };
+      };
 
-    // Step 5: Call API with retry logic (stable model by default)
-    const rawData = await callGeminiAPIWithRetry(requestBody, "transcription", GEMINI_TRANSCRIBE_MODEL);
+      rawData = await callGeminiAPIWithRetry(requestBody, "transcription", GEMINI_TRANSCRIBE_MODEL);
+    } finally {
+      await deleteGeminiFile(geminiFileName);
+    }
 
     console.log("📋 Full Gemini API response:");
     console.log(JSON.stringify(rawData, null, 2));
@@ -268,15 +284,17 @@ export async function transcribeMeetingSegments(
   fileName: string
 ): Promise<SegmentedTranscriptionResult> {
   try {
-    const { base64Data, mimeType, isAudio } = await prepareFileForGemini(fileUrl, fileName);
+    const { fileUri, geminiFileName, mimeType, isAudio } = await prepareFileForGemini(fileUrl, fileName);
 
-    const requestBody: Record<string, unknown> = {
-      contents: [
-        {
-          parts: [
-            { inlineData: { data: base64Data, mimeType } },
-            {
-              text: `Transcribe this ${isAudio ? "audio" : "video"} recording of a meeting.
+    let rawData;
+    try {
+      const requestBody: Record<string, unknown> = {
+        contents: [
+          {
+            parts: [
+              { fileData: { fileUri, mimeType } },
+              {
+                text: `Transcribe this ${isAudio ? "audio" : "video"} recording of a meeting.
 
 Break the transcription into short segments, one per distinct thought or speaker turn. For each segment, provide:
 - "speaker": a label like "Speaker 1", "Speaker 2" if you can distinguish voices, or null if you cannot.
@@ -285,23 +303,27 @@ Break the transcription into short segments, one per distinct thought or speaker
 - "text": the transcribed words for that segment.
 
 Provide your best estimate of timestamps even if you are not fully certain - approximate timestamps are acceptable. Return an empty array if there is no speech.`,
-            },
-          ],
+              },
+            ],
+          },
+        ],
+        generationConfig: {
+          temperature: 0.1,
+          maxOutputTokens: 8192,
+          responseMimeType: "application/json",
+          responseSchema: SEGMENT_RESPONSE_SCHEMA,
         },
-      ],
-      generationConfig: {
-        temperature: 0.1,
-        maxOutputTokens: 8192,
-        responseMimeType: "application/json",
-        responseSchema: SEGMENT_RESPONSE_SCHEMA,
-      },
-    };
+      };
 
-    const rawData = await callGeminiAPIWithRetry(
-      requestBody,
-      "segmented transcription",
-      GEMINI_TRANSCRIBE_MODEL
-    );
+      rawData = await callGeminiAPIWithRetry(
+        requestBody,
+        "segmented transcription",
+        GEMINI_TRANSCRIBE_MODEL
+      );
+    } finally {
+      await deleteGeminiFile(geminiFileName);
+    }
+
     const jsonText = extractTextFromGeminiResponse(rawData);
 
     let parsed: unknown;

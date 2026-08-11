@@ -4,6 +4,7 @@ import getDbConnection from "@/lib/db";
 import { currentUser } from "@clerk/nextjs/server";
 import { callGeminiAPIWithRetry, extractTextFromGeminiResponse } from "@/lib/gemini";
 import { formatTimestamp } from "@/lib/utils";
+import { logUsageEvent, checkRateLimit } from "@/lib/usage-tracking";
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GEMINI_EMBEDDING_MODEL = process.env.GEMINI_EMBEDDING_MODEL || "gemini-embedding-001";
@@ -284,7 +285,12 @@ interface ChunkForAnswer {
     text: string;
 }
 
-async function answerFromChunks(question: string, chunks: ChunkForAnswer[]): Promise<string> {
+async function answerFromChunks(
+    question: string,
+    chunks: ChunkForAnswer[],
+    userId: string,
+    eventType: "ask_meeting" | "ask_across_meetings"
+): Promise<string> {
     if (chunks.length === 0) {
         return "I couldn't find anything relevant in your meetings to answer that.";
     }
@@ -311,6 +317,7 @@ Question: ${question}
     };
 
     const rawData = await callGeminiAPIWithRetry(requestBody, "meeting Q&A", GEMINI_QA_MODEL);
+    await logUsageEvent(userId, eventType, GEMINI_QA_MODEL, rawData.usageMetadata?.totalTokenCount ?? null);
     return extractTextFromGeminiResponse(rawData);
 }
 
@@ -323,6 +330,14 @@ export async function askMeeting(meetingId: number, question: string): Promise<A
     }
     if (!question.trim()) {
         return { success: false, message: "Please enter a question." };
+    }
+
+    const rateLimit = await checkRateLimit(user.id, "ask_meeting", 15, 10);
+    if (!rateLimit.allowed) {
+        return {
+            success: false,
+            message: `You've asked ${rateLimit.count} questions in the last 10 minutes (limit ${rateLimit.limit}). Please wait a bit before asking more.`,
+        };
     }
 
     try {
@@ -366,7 +381,9 @@ export async function askMeeting(meetingId: number, question: string): Promise<A
                 meetingTitle: meeting.title as string,
                 startSeconds: r.start_seconds as number | null,
                 text: r.text as string,
-            }))
+            })),
+            user.id,
+            "ask_meeting"
         );
 
         return { success: true, message: "OK", answer, sources };
@@ -389,6 +406,14 @@ export async function askAcrossMeetings(question: string): Promise<AskResult> {
     }
     if (!question.trim()) {
         return { success: false, message: "Please enter a question." };
+    }
+
+    const rateLimit = await checkRateLimit(user.id, "ask_across_meetings", 15, 10);
+    if (!rateLimit.allowed) {
+        return {
+            success: false,
+            message: `You've asked ${rateLimit.count} questions in the last 10 minutes (limit ${rateLimit.limit}). Please wait a bit before asking more.`,
+        };
     }
 
     try {
@@ -424,7 +449,9 @@ export async function askAcrossMeetings(question: string): Promise<AskResult> {
                 meetingTitle: r.meeting_title as string,
                 startSeconds: r.start_seconds as number | null,
                 text: r.text as string,
-            }))
+            })),
+            user.id,
+            "ask_across_meetings"
         );
 
         return { success: true, message: "OK", answer, sources };

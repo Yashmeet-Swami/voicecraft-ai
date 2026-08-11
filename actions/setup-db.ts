@@ -192,6 +192,21 @@ export async function setupMeetingsSchema() {
     `;
     console.log("✅ notifications table created");
 
+    // Phase 5: lightweight usage tracking, used both for a basic /usage
+    // observability page and for per-user rate limiting on expensive
+    // actions (ask*, meeting creation) - see lib/usage-tracking.ts.
+    await sql`
+      CREATE TABLE IF NOT EXISTS usage_events (
+        id SERIAL PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        model TEXT,
+        total_tokens INTEGER,
+        created_at TIMESTAMPTZ DEFAULT now()
+      );
+    `;
+    console.log("✅ usage_events table created");
+
     console.log("🎉 Meeting intelligence schema setup complete!");
     return { success: true, message: "Meeting intelligence schema created successfully" };
   } catch (error) {

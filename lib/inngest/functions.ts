@@ -10,7 +10,16 @@ const MAX_JOBS_PER_INVOCATION = 5;
 // processNextJob()'s "claim exactly one queued job" contract (see
 // docs/meeting-intelligence-pivot-plan.md §5, Phase 3.5).
 export const processMeetingJob = inngest.createFunction(
-  { id: "process-meeting-job", triggers: [{ event: "meeting/processing.requested" }] },
+  {
+    id: "process-meeting-job",
+    triggers: [{ event: "meeting/processing.requested" }],
+    // Caps parallel Gemini calls across concurrently-arriving events -
+    // protects the shared free-tier rate limit (Phase 5, see docs/
+    // meeting-intelligence-pivot-plan.md §8). processNextJob()'s own
+    // FOR UPDATE SKIP LOCKED already prevents double-processing the same
+    // job; this limits how many *different* jobs run at once.
+    concurrency: { limit: 2 },
+  },
   async () => {
     let processedCount = 0;
 
