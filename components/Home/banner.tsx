@@ -1,34 +1,51 @@
 import Link from "next/link";
 import { Button } from "../ui/button";
-import { ArrowRight } from "lucide-react";
+import { ArrowRight, Sparkles } from "lucide-react";
+import { SignedIn, SignedOut } from "@clerk/nextjs";
 
 export default function Banner() {
   return (
-    <section
-      className="lg:max-w-6xl mx-auto flex flex-col
-        z-0 items-center justify-center py-28 sm:pt-32 transition-all animate-in"
-    >
-      <h1 className="py-6 text-center">
-        Turn your words into{" "}
-        <span className="underline underline-offset-8 decoration-dashed decoration-purple-200">
-          captivating
-        </span>{" "}
-        blog posts
-      </h1>
-      <h2 className="text-center px-4 lg:px-0 lg:max-w-3xl text-lg text-gray-600 leading-relaxed">
-        Convert your video or voice into a Blog Post in seconds with the power
-        of AI!
-      </h2>
+    <section className="lg:max-w-5xl mx-auto flex flex-col z-0 items-center justify-center px-4 py-24 sm:py-32 text-center transition-all animate-in">
+      <div className="inline-flex items-center gap-2 rounded-full border border-purple-200 bg-purple-50 px-4 py-1.5 text-sm font-medium text-purple-700 mb-8">
+        <Sparkles className="w-4 h-4" />
+        Now with AI-powered meeting intelligence
+      </div>
 
-      <Button
-        variant={"link"}
-        className="mt-6 text-xl rounded-full px-12 py-8 lg:mt-20 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-indigo-600 hover:to-purple-600 text-white font-bold shadow-lg hover:no-underline"
-      >
-        <Link href="/#pricing" className="flex gap-2 items-center">
-          <span className="relative">Get VoiceCraft </span>
-          <ArrowRight className="animate-pulse" />
-        </Link>
-      </Button>
+      <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold tracking-tight text-gray-900">
+        Turn every meeting into{" "}
+        <span className="text-purple-600">structured, searchable knowledge</span>
+      </h1>
+
+      <p className="mt-6 text-lg sm:text-xl text-gray-600 leading-relaxed max-w-2xl">
+        Upload a recording and get a summary, decisions, and action items — each one traceable
+        back to the exact moment it was said. Then ask questions across every meeting you&rsquo;ve
+        ever had.
+      </p>
+
+      <div className="mt-10 flex flex-col sm:flex-row items-center gap-4">
+        <SignedIn>
+          <Button
+            asChild
+            className="text-base rounded-full px-8 py-6 bg-purple-600 hover:bg-purple-700 text-white font-semibold shadow-lg shadow-purple-600/20"
+          >
+            <Link href="/meetings" className="flex gap-2 items-center">
+              Go to your meetings
+              <ArrowRight className="w-4 h-4" />
+            </Link>
+          </Button>
+        </SignedIn>
+        <SignedOut>
+          <Button
+            asChild
+            className="text-base rounded-full px-8 py-6 bg-purple-600 hover:bg-purple-700 text-white font-semibold shadow-lg shadow-purple-600/20"
+          >
+            <Link href="/sign-up" className="flex gap-2 items-center">
+              Get started free
+              <ArrowRight className="w-4 h-4" />
+            </Link>
+          </Button>
+        </SignedOut>
+      </div>
     </section>
   );
 }

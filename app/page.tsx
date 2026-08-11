@@ -1,39 +1,24 @@
 import Banner from "@/components/Home/banner";
 import BgGradient from "@/components/common/gradient";
-import { Dot } from "lucide-react";
 import HowItWorks from "@/components/Home/howitworks";
-import Pricing from "@/components/Home/pricing";
+import Features from "@/components/Home/features";
+
 export default function Home() {
   return (
-    <main className="mx-auto w-full inset-0 h-full bg-[radial-gradient(#e5e7eb_1px), transparent_1px)]
-    [background-size:16px_16px]">
-      <BgGradient />
-      <Banner />
-      <div className="flex items-center justify-center">
-        <Dot className="text-purple-400"></Dot>
-        <Dot className="text-purple-400"></Dot>
-        <Dot className="text-purple-400"></Dot>
-      </div>
+    <main className="mx-auto w-full">
+      <BgGradient>
+        <Banner />
+      </BgGradient>
 
       <HowItWorks />
-      <div className="flex items-center justify-center">
-        <Dot className="text-purple-400"></Dot>
-        <Dot className="text-purple-400"></Dot>
-        <Dot className="text-purple-400"></Dot>
-      </div>
-      
-      <Pricing />
-      <div className="flex items-center justify-center">
-        <Dot className="text-purple-400"></Dot>
-        <Dot className="text-purple-400"></Dot>
-        <Dot className="text-purple-400"></Dot>
-      </div>
-      
-      <footer className="bg-gray-100/20 flex h-20 py-24 px-12 z-20 relative overflow-hidden flex-col gap-2 items-end">
-        <p>All Rights Reserved, {new Date().getFullYear()}</p>
-        <a href="/" target="_blank">
-          Built by Yashmeet 🚀
-        </a>
+      <div className="border-t border-gray-100" />
+      <Features />
+
+      <footer className="border-t border-gray-100 bg-gray-50/50 py-10 px-6 sm:px-12">
+        <div className="max-w-5xl mx-auto flex flex-col sm:flex-row justify-between items-center gap-2 text-sm text-gray-500">
+          <p>© {new Date().getFullYear()} VoiceCraft. All rights reserved.</p>
+          <p>Built by Yashmeet 🚀</p>
+        </div>
       </footer>
     </main>
   );
